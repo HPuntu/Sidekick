@@ -1,0 +1,28 @@
+{
+  "name": "obsidian-agent-dashboard",
+  "version": "0.1.0",
+  "description": "An Obsidian dashboard surface for local agentic coding workflows.",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "typecheck": "tsc -noEmit -skipLibCheck"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "agent",
+    "ollama",
+    "dashboard"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.28.0",
+    "obsidian": "^1.5.12",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.5"
+  }
+}
