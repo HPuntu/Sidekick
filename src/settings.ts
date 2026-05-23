@@ -3,9 +3,11 @@ import { App, PluginSettingTab, Setting } from "obsidian";
 import AgentDashboardPlugin from "./main";
 
 export interface AgentDashboardSettings {
+  agentSessionName: string;
   allowedExternalWorkspaceRoots: string;
   autoStartBridge: boolean;
   piExecutablePath: string;
+  selectedPiModel: string;
   ollamaHost: string;
   defaultModel: string;
   compactBlockHeight: number;
@@ -13,9 +15,11 @@ export interface AgentDashboardSettings {
 }
 
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
+  agentSessionName: "default",
   allowedExternalWorkspaceRoots: "",
   autoStartBridge: true,
   piExecutablePath: "pi",
+  selectedPiModel: "",
   ollamaHost: "http://127.0.0.1:11434",
   defaultModel: "",
   compactBlockHeight: 360,
@@ -51,7 +55,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Safety mode")
       .setDesc(
-        "Read-only is locked on. Pi execution, shell commands, file writes, and deletes are blocked until the approval queue is implemented."
+        "Reviewed edits mode is active. Shell commands and deletes are blocked. Approved agent-edit proposals can be applied to vault Markdown files."
       );
 
     new Setting(containerEl)
@@ -65,6 +69,24 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.allowedExternalWorkspaceRoots)
           .onChange(async (value) => {
             this.plugin.settings.allowedExternalWorkspaceRoots = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshDashboardViews();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Agent session")
+      .setDesc(
+        "Persistent Pi session name. Changing it starts using a different stored conversation."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.agentSessionName)
+          .setValue(this.plugin.settings.agentSessionName)
+          .onChange(async (value) => {
+            this.plugin.settings.agentSessionName =
+              value.trim() || DEFAULT_SETTINGS.agentSessionName;
+            this.plugin.resetPiSessionMetadata();
             await this.plugin.saveSettings();
             this.plugin.refreshDashboardViews();
           })
@@ -130,7 +152,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Permission mode")
       .setDesc(
-        "Reserved for the future approval queue. Disabled while read-only safety mode is active."
+        "Reserved for broader future permissions. Shell commands and deletes remain blocked."
       )
       .addDropdown((dropdown) =>
         dropdown

@@ -1,13 +1,15 @@
 import path from "path";
 
 export type SafetyActionKind =
+  | "approved-write"
   | "delete"
   | "diagnostic"
+  | "prompt"
   | "read"
   | "shell"
   | "write";
 
-export type SafetyMode = "read-only";
+export type SafetyMode = "read-only" | "reviewed-edits";
 
 export interface SafetyRequest {
   kind: SafetyActionKind;
@@ -38,6 +40,41 @@ export function assessSafetyRequest(
     return {
       allowed: true,
       reason: "Read-only mode allows manual diagnostic probes.",
+      request,
+      requiresApproval: false
+    };
+  }
+
+  if (request.kind === "prompt") {
+    const command = request.command ?? "";
+    if (!/\s(--no-tools|-nt)(\s|$)/.test(` ${command} `)) {
+      return deny(
+        snapshot,
+        request,
+        "Read-only mode only allows Pi prompts when tools are disabled."
+      );
+    }
+
+    return {
+      allowed: true,
+      reason: "Read-only mode allows prompts when Pi tools are disabled.",
+      request,
+      requiresApproval: false
+    };
+  }
+
+  if (request.kind === "approved-write") {
+    if (!request.targetPath) {
+      return deny(snapshot, request, "Approved writes must include a target path.");
+    }
+
+    if (!isPathInsideAnyRoot(request.targetPath, snapshot.allowedRoots)) {
+      return deny(snapshot, request, "Path is outside the allowed workspace roots.");
+    }
+
+    return {
+      allowed: true,
+      reason: "Reviewed edit mode allows approved writes inside allowed roots.",
       request,
       requiresApproval: false
     };

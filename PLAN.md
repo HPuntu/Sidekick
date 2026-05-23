@@ -14,6 +14,32 @@ The core product should feel like a local coding cockpit inside Obsidian:
 - Optional separate terminal plugin usage instead of an embedded terminal panel.
 - Compatibility with Dashboard++ style Markdown dashboards.
 
+## Product Positioning
+
+This plugin should borrow the best interaction ideas from general agent clients, but should not become a full ACP/IDE replacement. The selling point is a local-first Obsidian companion for Pi and Ollama that sits beside notes, keeps the vault visible, and makes agent edits reviewable.
+
+What to borrow from richer agent clients:
+
+- Session landing page and chat history.
+- Fast model/session switching.
+- Clear tool call and result rendering.
+- Slash-style or keyboard-friendly actions if they remain lightweight.
+- File mention ergonomics for vault context.
+- Exportable session summaries later if useful.
+
+What to keep intentionally narrow:
+
+- Local Ollama-backed models through Pi as the primary runtime.
+- Right-sidebar workflow that accompanies Obsidian notes instead of replacing the editor.
+- Vault-aware context and Obsidian APIs for note opening/editing.
+- Reviewed Markdown edit proposals instead of broad direct file mutation.
+- No broad ACP marketplace, embedded IDE, or terminal takeover in the main dashboard.
+
+Design principle:
+
+- If a feature makes the dashboard feel like a safer note-side collaborator, include it.
+- If a feature turns the plugin into a general agent IDE, either omit it or make it an optional future integration.
+
 ## Current Implementation Status
 
 Completed so far:
@@ -28,8 +54,8 @@ Completed so far:
 - Right-sidebar dashboard layout with only Status and Agent panels.
 - Ollama health/model query helper.
 - Status panel Ollama check control and model summary.
-- Interactive Agent panel with prompt input, send/stop/clear controls, and mock event stream.
-- Locked read-only safety mode.
+- Interactive Agent panel with prompt input, send/stop/clear controls, and event stream.
+- Reviewed edit safety mode.
 - Workspace allowlist based on vault root plus optional external roots.
 - Safety decision guard for read, shell, write, and delete requests.
 - Safety self-check command and local audit counter.
@@ -39,12 +65,51 @@ Completed so far:
 - Approve/deny controls that record decisions but do not execute actions.
 - Read-only Pi RPC discovery probe using JSONL commands `get_state` and `get_available_models`.
 - Manual RPC status check with diagnostic safety audit entries.
+- Pi RPC model summaries from discovery responses.
+- Persistent right-sidebar Pi model selector.
+- Read-only Pi prompt runner using RPC mode with session persistence, tools, extensions, skills, prompt templates, and context files disabled.
+- Safety policy only allows prompt runs when the recorded Pi command includes `--no-tools` or `-nt`.
+- Streaming assistant text from Pi `message_update` / `text_delta` events into the Agent panel.
+- Stop control that sends a Pi RPC abort request before cleaning up the local process.
+- Selected Pi model passed to the prompt runner with `--model`.
+- Unexpected Pi tool events routed into the approval queue instead of being executed.
+- Explicit Agent panel actions to send a prompt with the current note or current editor selection as read-only context.
+- Context reads audited through the safety policy and capped before being sent to Pi.
+- Exact `@path/to/file.md` vault file references in prompts, resolved through Obsidian vault APIs.
+- Mentioned `@` files are read-only, safety-audited, deduplicated, and limited to five files per prompt.
+- Agent prompt `@` autocomplete for vault Markdown files, with fuzzy matching and keyboard/mouse selection.
+- `@` file resolution matches against actual vault file paths before token parsing, so paths with spaces are handled correctly.
+- `@[[Wiki Link]]` note references resolve to vault Markdown files for read-only context, and `@[[` can use autocomplete insertion.
+- Agent event bodies rendered through Obsidian's Markdown renderer, including normal Markdown and Obsidian-supported math rendering.
+- Vault file paths mentioned in agent events surfaced as clickable file chips that open the note in Obsidian.
+- Vault file paths inside rendered Markdown paragraphs are linked inline while code/math blocks are left untouched.
+- Pi prompt runner now falls back to final `message_end`, `turn_end`, and `agent_end` payloads when streaming text deltas are absent.
+- Reasoning-only streaming phases surface a one-time "Pi is reasoning" status without exposing hidden reasoning content.
+- Persistent Pi session file support using `--session` instead of `--no-session` for prompt runs.
+- Dashboard event history, approvals, proposed edits, counters, and Pi session metadata persist through Obsidian restarts.
+- Agent panel includes a New session control that rotates to a fresh stored Pi session without deleting previous session files.
+- Agent panel opens to a session history page, with chat cards, a new-chat composer, and a back control from chat to history.
+- Named session history can reopen previous persisted dashboard chat state.
+- Active chat can export to Markdown, defaulting to `Chats/<session-title>.md` and creating the vault folder if needed.
+- Pi model dropdown calls `set_model` against the active persistent Pi session when idle.
+- Agent panel has a persistent compact model rail with Discover Models/Refresh, sideways-scrolling local model chips, and current-model badges.
+- Tool events render as structured cards with status, name, call id, and input/output payload sections when available.
+- `agent-edit` fenced blocks are detected after assistant responses and stored as proposed vault edits.
+- Proposed edits render as reviewed diff cards with target file, file status, and line-level added/removed/unchanged rows.
+- Each proposed edit queues a write approval.
+- Approved proposed edits can be applied to vault Markdown files through Obsidian vault APIs.
+- Apply re-reads the target file and blocks stale proposals if the file changed after the diff was generated.
+- Shell commands, deletes, external writes, and unapproved writes remain blocked.
 
 Not implemented yet:
 
-- Pi RPC session management.
-- Real streamed agent/tool events.
-- Approval execution path after read-only mode is lifted.
+- Broader permission modes beyond reviewed vault Markdown edits.
+
+Next implementation slice:
+
+- Add lightweight event rendering for Pi run lifecycle events such as turn start/end and message start/end.
+- Add richer tool call/result rendering for allowed future tools as Pi event schemas expand.
+- Expand inline path linking to more Obsidian link syntaxes if useful.
 
 ## Reference Compatibility Target
 
@@ -485,6 +550,7 @@ Deliverables:
 
 - Start Pi in RPC mode.
 - Create/send/stop session.
+- Resume a stable session file across prompt runs and Obsidian restarts.
 - Stream agent text and tool events.
 - Session picker.
 
@@ -493,6 +559,7 @@ Acceptance criteria:
 - User can start a Pi-backed local agent session.
 - User can send a prompt from Obsidian.
 - Agent response streams into the dashboard.
+- Follow-up prompts reuse the same Pi session unless the user starts a new session.
 - Errors and process exits are shown in the UI.
 
 ### Milestone 6: Native Editor Context Actions

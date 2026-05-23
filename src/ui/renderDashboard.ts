@@ -1,7 +1,9 @@
-import { ButtonComponent, Notice, setIcon } from "obsidian";
+import { ButtonComponent, MarkdownRenderer, setIcon, TFile } from "obsidian";
 
 import type AgentDashboardPlugin from "../main";
-import type { AgentEvent } from "../agent/AgentSession";
+import type { AgentSessionHistoryItem, ProposedEditRecord } from "../main";
+import type { AgentEvent, AgentToolEvent } from "../agent/AgentSession";
+import type { ProposedEditDiffLine } from "../agent/ProposedEdit";
 import type { BridgeSnapshot } from "../bridge/BridgeService";
 import type { OllamaSnapshot } from "../bridge/ollama/OllamaClient";
 import type { PiSnapshot } from "../bridge/pi/PiProbe";
@@ -130,8 +132,13 @@ function renderStatusPanel(
   renderOllamaStatusItems(listEl, plugin.ollamaSnapshot);
   renderSafetyStatusItems(plugin, listEl);
   renderStatusItem(listEl, "Agent", plugin.agentSessionStatus);
+  renderStatusItem(
+    listEl,
+    "Selected Pi",
+    plugin.settings.selectedPiModel || "not selected"
+  );
   renderStatusItem(listEl, "Workspace", options.workspace ?? "vault");
-  renderStatusItem(listEl, "Session", options.session ?? "default");
+  renderStatusItem(listEl, "Session", plugin.getAgentSessionSummary());
 }
 
 function renderBridgeStatusItem(
@@ -213,12 +220,27 @@ function renderPiRpcStatusItems(
   if (snapshot.modelCount !== undefined) {
     renderStatusItem(containerEl, "RPC models", String(snapshot.modelCount));
   }
+
+  if (snapshot.models.length > 0) {
+    renderStatusItem(containerEl, "RPC list", describePiRpcModels(snapshot));
+  }
 }
 
 function describePiRpcReady(snapshot: PiRpcDiscoverySnapshot): string {
   const commandCount = snapshot.commandCount ?? 0;
   const responseCount = snapshot.responseCount ?? 0;
   return `ready (${responseCount}/${commandCount} discovery responses)`;
+}
+
+function describePiRpcModels(snapshot: PiRpcDiscoverySnapshot): string {
+  const names = snapshot.models.slice(0, 3).map((model) => model.label);
+  const extraCount = snapshot.models.length - names.length;
+
+  if (extraCount > 0) {
+    return `${names.join(", ")} +${extraCount}`;
+  }
+
+  return names.join(", ");
 }
 
 function describeModels(snapshot: OllamaSnapshot): string {
@@ -276,12 +298,35 @@ function renderAgentPanel(
     cls: "agent-dashboard__panel agent-dashboard__panel--agent"
   });
   const headingEl = panelEl.createDiv({ cls: "agent-dashboard__panel-heading" });
-  headingEl.createEl("h4", { text: "Agent" });
 
   const rootEl = containerEl.parentElement ?? containerEl;
+  if (plugin.agentViewMode === "chat") {
+    const titleEl = headingEl.createDiv({
+      cls: "agent-dashboard__chat-title"
+    });
+    new ButtonComponent(titleEl)
+      .setIcon("arrow-left")
+      .setTooltip("Back to sessions")
+      .onClick(() => {
+        void plugin.showAgentHistory();
+        renderDashboardShell(plugin, rootEl, options);
+    });
+    titleEl.createEl("h4", { text: "Agent" });
+    renderCurrentModelPill(plugin, titleEl);
+  } else {
+    headingEl.createEl("h4", { text: "Sessions" });
+  }
+
   const controlsEl = headingEl.createDiv({
     cls: "agent-dashboard__panel-controls"
   });
+
+  renderModelSelector(plugin, panelEl, rootEl, options);
+
+  if (plugin.agentViewMode === "history") {
+    renderAgentHistoryPage(plugin, panelEl, rootEl, options);
+    return;
+  }
 
   if (plugin.agentSessionStatus === "running") {
     new ButtonComponent(controlsEl)
@@ -301,6 +346,25 @@ function renderAgentPanel(
       renderDashboardShell(plugin, rootEl, options);
     });
 
+  new ButtonComponent(controlsEl)
+    .setButtonText("New")
+    .setTooltip("Start a fresh persistent Pi session")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(() => {
+      void plugin.startNewAgentSession();
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
+  new ButtonComponent(controlsEl)
+    .setButtonText("Export")
+    .setTooltip("Export chat to Markdown")
+    .setDisabled(
+      plugin.agentSessionStatus === "running" || plugin.agentEvents.length === 0
+    )
+    .onClick(() => {
+      plugin.openChatExportModal();
+    });
+
   renderApprovalQueue(plugin, panelEl, rootEl, options);
 
   const streamEl = panelEl.createDiv({ cls: "agent-dashboard__event-stream" });
@@ -311,7 +375,7 @@ function renderAgentPanel(
     });
   } else {
     for (const event of plugin.agentEvents) {
-      renderAgentEvent(streamEl, event);
+      renderAgentEvent(plugin, streamEl, event);
     }
     streamEl.scrollTop = streamEl.scrollHeight;
   }
@@ -325,11 +389,58 @@ function renderAgentPanel(
     }
   });
   promptEl.disabled = plugin.agentSessionStatus === "running";
+  const suggestionsEl = composerEl.createDiv({
+    cls: "agent-dashboard__mention-suggestions"
+  });
+  suggestionsEl.hide();
+  let mentionSuggestions: string[] = [];
+  let selectedMentionIndex = 0;
+
   promptEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      sendPrompt();
+      void sendPrompt("none");
+      closeMentionSuggestions();
+      return;
     }
+
+    if (!suggestionsEl.hasClass("is-visible")) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectedMentionIndex = Math.min(
+        selectedMentionIndex + 1,
+        mentionSuggestions.length - 1
+      );
+      renderMentionSuggestions();
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectedMentionIndex = Math.max(selectedMentionIndex - 1, 0);
+      renderMentionSuggestions();
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      acceptMentionSuggestion(mentionSuggestions[selectedMentionIndex]);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMentionSuggestions();
+    }
+  });
+  promptEl.addEventListener("input", () => {
+    updateMentionSuggestions();
+  });
+  promptEl.addEventListener("click", () => {
+    updateMentionSuggestions();
   });
 
   const composerActionsEl = composerEl.createDiv({
@@ -340,18 +451,420 @@ function renderAgentPanel(
     .setTooltip("Send prompt")
     .setDisabled(plugin.agentSessionStatus === "running")
     .onClick(() => {
-      sendPrompt();
+      void sendPrompt("none");
     });
 
-  function sendPrompt(): void {
-    const accepted = plugin.sendAgentPrompt(promptEl.value);
+  new ButtonComponent(composerActionsEl)
+    .setButtonText("Note")
+    .setTooltip("Send prompt with current note context")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(() => {
+      void sendPrompt("note");
+    });
+
+  new ButtonComponent(composerActionsEl)
+    .setButtonText("Selection")
+    .setTooltip("Send prompt with selected text context")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(() => {
+      void sendPrompt("selection");
+    });
+
+  async function sendPrompt(
+    contextMode: "none" | "note" | "selection"
+  ): Promise<void> {
+    const accepted = await plugin.sendAgentPrompt(promptEl.value, contextMode);
     if (!accepted) {
       return;
     }
 
     promptEl.value = "";
+    closeMentionSuggestions();
     renderDashboardShell(plugin, rootEl, options);
   }
+
+  function updateMentionSuggestions(): void {
+    const mention = getActiveMention(promptEl);
+    if (!mention) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    mentionSuggestions = plugin.getVaultFileSuggestions(mention.query);
+    selectedMentionIndex = 0;
+
+    if (mentionSuggestions.length === 0) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    renderMentionSuggestions();
+  }
+
+  function renderMentionSuggestions(): void {
+    suggestionsEl.empty();
+    suggestionsEl.show();
+    suggestionsEl.addClass("is-visible");
+
+    for (let index = 0; index < mentionSuggestions.length; index += 1) {
+      const suggestion = mentionSuggestions[index];
+      const itemEl = suggestionsEl.createDiv({
+        cls: "agent-dashboard__mention-suggestion",
+        text: suggestion
+      });
+      itemEl.toggleClass("is-selected", index === selectedMentionIndex);
+      itemEl.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        acceptMentionSuggestion(suggestion);
+      });
+    }
+  }
+
+  function closeMentionSuggestions(): void {
+    mentionSuggestions = [];
+    selectedMentionIndex = 0;
+    suggestionsEl.removeClass("is-visible");
+    suggestionsEl.hide();
+    suggestionsEl.empty();
+  }
+
+  function acceptMentionSuggestion(suggestion: string | undefined): void {
+    if (!suggestion) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    const mention = getActiveMention(promptEl);
+    if (!mention) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    const value = promptEl.value;
+    const suffix = value.slice(mention.end);
+    const trailingSpace = suffix.length > 0 && !/^\s/.test(suffix) ? " " : "";
+    const insertion = mention.query.startsWith("[[")
+      ? `@[[${suggestion.replace(/\.md$/i, "")}]]${trailingSpace}`
+      : `@${suggestion}${trailingSpace}`;
+    promptEl.value = `${value.slice(0, mention.start)}${insertion}${suffix}`;
+    const cursor = mention.start + insertion.length;
+    promptEl.setSelectionRange(cursor, cursor);
+    promptEl.focus();
+    closeMentionSuggestions();
+  }
+}
+
+function renderAgentHistoryPage(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  rootEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const pageEl = containerEl.createDiv({
+    cls: "agent-dashboard__session-page"
+  });
+
+  const composerEl = pageEl.createDiv({
+    cls: "agent-dashboard__session-composer"
+  });
+  const promptEl = composerEl.createEl("textarea", {
+    cls: "agent-dashboard__prompt-input",
+    attr: {
+      placeholder: "Start a new chat...",
+      rows: "3"
+    }
+  });
+  const actionsEl = composerEl.createDiv({
+    cls: "agent-dashboard__composer-actions"
+  });
+
+  new ButtonComponent(actionsEl)
+    .setButtonText("Send")
+    .setTooltip("Start a new chat")
+    .onClick(() => {
+      void startSession("none");
+    });
+  new ButtonComponent(actionsEl)
+    .setButtonText("Note")
+    .setTooltip("Start a new chat with current note context")
+    .onClick(() => {
+      void startSession("note");
+    });
+  new ButtonComponent(actionsEl)
+    .setButtonText("Selection")
+    .setTooltip("Start a new chat with selected text context")
+    .onClick(() => {
+      void startSession("selection");
+    });
+
+  promptEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void startSession("none");
+    }
+  });
+
+  const historyEl = pageEl.createDiv({
+    cls: "agent-dashboard__session-history"
+  });
+  const headingEl = historyEl.createDiv({
+    cls: "agent-dashboard__session-history-heading"
+  });
+  headingEl.createSpan({ text: "Recent chats" });
+  new ButtonComponent(headingEl)
+    .setButtonText("New")
+    .setTooltip("Open an empty new chat")
+    .onClick(() => {
+      void plugin.startNewAgentSession();
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
+  const sessions = plugin.getAgentSessionHistory();
+  if (sessions.length === 0) {
+    historyEl.createEl("p", {
+      cls: "agent-dashboard__empty",
+      text: "No chats yet."
+    });
+  } else {
+    const listEl = historyEl.createDiv({
+      cls: "agent-dashboard__session-list"
+    });
+    for (const session of sessions) {
+      renderSessionHistoryItem(plugin, listEl, rootEl, options, session);
+    }
+  }
+
+  async function startSession(
+    contextMode: "none" | "note" | "selection"
+  ): Promise<void> {
+    const prompt = promptEl.value.trim();
+    if (!prompt) {
+      return;
+    }
+
+    await plugin.startNewAgentSession();
+    const accepted = await plugin.sendAgentPrompt(prompt, contextMode);
+    if (accepted) {
+      promptEl.value = "";
+    }
+    renderDashboardShell(plugin, rootEl, options);
+  }
+}
+
+function renderSessionHistoryItem(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  rootEl: HTMLElement,
+  options: DashboardRenderOptions,
+  session: AgentSessionHistoryItem
+): void {
+  const itemEl = containerEl.createEl("button", {
+    cls: "agent-dashboard__session-item",
+    type: "button"
+  });
+  itemEl.createDiv({
+    cls: "agent-dashboard__session-title",
+    text: session.title
+  });
+  itemEl.createDiv({
+    cls: "agent-dashboard__session-excerpt",
+    text: session.lastMessage || "No messages yet."
+  });
+  const metaEl = itemEl.createDiv({
+    cls: "agent-dashboard__session-meta"
+  });
+  metaEl.createSpan({ text: formatSessionDate(session.updatedAt) });
+  if (session.messageCount !== undefined) {
+    metaEl.createSpan({ text: `${session.messageCount} messages` });
+  }
+  if (session.piSessionId) {
+    metaEl.createSpan({ text: session.piSessionId.slice(0, 8) });
+  }
+
+  itemEl.addEventListener("click", () => {
+    void plugin.openAgentSession(session.name);
+    renderDashboardShell(plugin, rootEl, options);
+  });
+}
+
+function getActiveMention(
+  promptEl: HTMLTextAreaElement
+): { end: number; query: string; start: number } | undefined {
+  const cursor = promptEl.selectionStart ?? 0;
+  const beforeCursor = promptEl.value.slice(0, cursor);
+  const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/);
+  if (!match || match.index === undefined) {
+    return undefined;
+  }
+
+  const start = match.index + match[1].length;
+  return {
+    end: cursor,
+    query: match[2],
+    start
+  };
+}
+
+function renderModelSelector(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  rootEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const models = plugin.piRpcDiscoverySnapshot.models;
+  const selectorEl = containerEl.createDiv({
+    cls: "agent-dashboard__model-selector"
+  });
+  const headerEl = selectorEl.createDiv({
+    cls: "agent-dashboard__model-selector-header"
+  });
+  headerEl.createSpan({
+    cls: "agent-dashboard__model-label",
+    text: "Model"
+  });
+  const selectedLabel = getCurrentModelLabel(plugin);
+  if (selectedLabel) {
+    renderModelBadge(headerEl, selectedLabel, "agent-dashboard__model-current");
+  }
+
+  new ButtonComponent(headerEl)
+    .setButtonText(models.length === 0 ? "Discover Models" : "Refresh")
+    .setTooltip("Discover Pi RPC models")
+    .setDisabled(
+      plugin.agentSessionStatus === "running" ||
+        plugin.piRpcDiscoverySnapshot.status === "checking"
+    )
+    .onClick(async () => {
+      await plugin.refreshPiRpcDiscovery(true);
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
+  if (models.length === 0) {
+    selectorEl.createDiv({
+      cls: "agent-dashboard__model-meta",
+      text:
+        plugin.piRpcDiscoverySnapshot.status === "checking"
+          ? "Discovering models..."
+          : "Run discovery to show local Pi/Ollama models."
+    });
+    return;
+  }
+
+  const railEl = selectorEl.createDiv({
+    cls: "agent-dashboard__model-rail"
+  });
+  for (const model of models) {
+    const modelEl = railEl.createEl("button", {
+      cls: "agent-dashboard__model-chip",
+      type: "button"
+    });
+    modelEl.toggleClass("is-selected", model.label === selectedLabel);
+    modelEl.setAttr("aria-label", `Select ${model.label}`);
+    renderModelBadge(modelEl, model.label, "agent-dashboard__model-chip-icon");
+    modelEl.createSpan({
+      cls: "agent-dashboard__model-chip-label",
+      text: getShortModelLabel(model.label)
+    });
+    const metaText = describeSelectedModel(model);
+    if (metaText) {
+      modelEl.createSpan({
+        cls: "agent-dashboard__model-chip-meta",
+        text: metaText
+      });
+    }
+    modelEl.addEventListener("click", () => {
+      void plugin.selectPiModel(model.label);
+    });
+  }
+}
+
+function renderCurrentModelPill(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement
+): void {
+  const selectedLabel = getCurrentModelLabel(plugin);
+  if (!selectedLabel) {
+    return;
+  }
+
+  renderModelBadge(containerEl, selectedLabel, "agent-dashboard__chat-model-pill");
+}
+
+function renderModelBadge(
+  containerEl: HTMLElement,
+  modelLabel: string,
+  className: string
+): void {
+  const badgeEl = containerEl.createSpan({
+    cls: className
+  });
+  badgeEl.createSpan({
+    cls: "agent-dashboard__model-logo",
+    text: getModelLogoText(modelLabel)
+  });
+
+  if (
+    className === "agent-dashboard__model-current" ||
+    className === "agent-dashboard__chat-model-pill"
+  ) {
+    badgeEl.createSpan({
+      cls: "agent-dashboard__model-current-label",
+      text: getShortModelLabel(modelLabel)
+    });
+  }
+}
+
+function getCurrentModelLabel(plugin: AgentDashboardPlugin): string {
+  return (
+    plugin.settings.selectedPiModel ||
+    plugin.piRpcDiscoverySnapshot.currentModel ||
+    ""
+  );
+}
+
+function getShortModelLabel(modelLabel: string): string {
+  return modelLabel.replace(/^ollama\//, "");
+}
+
+function getModelLogoText(modelLabel: string): string {
+  const label = modelLabel.toLowerCase();
+  if (label.includes("deepseek")) {
+    return "D";
+  }
+
+  if (label.includes("gemma")) {
+    return "G";
+  }
+
+  if (label.includes("qwen")) {
+    return "Q";
+  }
+
+  if (label.includes("llama")) {
+    return "L";
+  }
+
+  if (label.includes("mistral")) {
+    return "M";
+  }
+
+  return "O";
+}
+
+function describeSelectedModel(
+  model: PiRpcDiscoverySnapshot["models"][number]
+): string {
+  const parts = [];
+
+  if (model.contextWindow) {
+    parts.push(`${Math.round(model.contextWindow / 1000)}k`);
+  }
+
+  if (model.reasoning) {
+    parts.push("reasoning");
+  }
+
+  return parts.join(" · ");
 }
 
 function renderApprovalQueue(
@@ -453,7 +966,16 @@ function getApprovalDetail(record: ApprovalRecord): string {
   return "";
 }
 
-function renderAgentEvent(containerEl: HTMLElement, event: AgentEvent): void {
+function renderAgentEvent(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  event: AgentEvent
+): void {
+  if (event.kind === "status") {
+    renderStatusLogLine(containerEl, event);
+    return;
+  }
+
   const eventEl = containerEl.createDiv({
     cls: `agent-dashboard__event agent-dashboard__event--${event.kind}`
   });
@@ -467,10 +989,578 @@ function renderAgentEvent(containerEl: HTMLElement, event: AgentEvent): void {
     cls: "agent-dashboard__event-time",
     text: formatEventTime(event.createdAt)
   });
-  eventEl.createDiv({
-    cls: "agent-dashboard__event-text",
+
+  if (event.kind === "tool") {
+    renderToolEvent(plugin, eventEl, event);
+    renderReferencedFiles(plugin, eventEl, event.text);
+    return;
+  }
+
+  const textEl = eventEl.createDiv({
+    cls: "agent-dashboard__event-text markdown-rendered"
+  });
+  void MarkdownRenderer.render(
+    plugin.app,
+    event.text,
+    textEl,
+    plugin.app.workspace.getActiveFile()?.path ?? "",
+    plugin
+  ).then(() => {
+    linkInlineReferencedFiles(plugin, textEl);
+  });
+  renderReferencedFiles(plugin, eventEl, event.text);
+  renderProposedEdits(plugin, eventEl, event.id);
+}
+
+function renderToolEvent(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  event: AgentEvent
+): void {
+  const tool = event.tool ?? inferToolEvent(event.text);
+  const cardEl = containerEl.createDiv({
+    cls: `agent-dashboard__tool-card agent-dashboard__tool-card--${tool.status}`
+  });
+  const headerEl = cardEl.createDiv({
+    cls: "agent-dashboard__tool-header"
+  });
+  const titleEl = headerEl.createDiv({
+    cls: "agent-dashboard__tool-title"
+  });
+  const iconEl = titleEl.createSpan({
+    cls: "agent-dashboard__tool-icon"
+  });
+  setIcon(iconEl, getToolStatusIcon(tool));
+  titleEl.createSpan({ text: tool.title });
+  headerEl.createSpan({
+    cls: "agent-dashboard__tool-status",
+    text: tool.status
+  });
+
+  const metaItems = [
+    tool.name ? `name: ${tool.name}` : "",
+    tool.callId ? `id: ${tool.callId}` : "",
+    tool.eventType ? `event: ${tool.eventType}` : ""
+  ].filter(Boolean);
+  if (metaItems.length > 0) {
+    cardEl.createDiv({
+      cls: "agent-dashboard__tool-meta",
+      text: metaItems.join(" · ")
+    });
+  }
+
+  if (tool.input !== undefined) {
+    renderToolPayload(cardEl, "Input", tool.input);
+  }
+
+  if (tool.output !== undefined) {
+    renderToolPayload(cardEl, tool.status === "error" ? "Error" : "Output", tool.output);
+  }
+
+  if (tool.input === undefined && tool.output === undefined) {
+    const textEl = cardEl.createDiv({
+      cls: "agent-dashboard__tool-text markdown-rendered"
+    });
+    void MarkdownRenderer.render(
+      plugin.app,
+      event.text,
+      textEl,
+      plugin.app.workspace.getActiveFile()?.path ?? "",
+      plugin
+    ).then(() => {
+      linkInlineReferencedFiles(plugin, textEl);
+    });
+  }
+}
+
+function renderToolPayload(
+  containerEl: HTMLElement,
+  label: string,
+  value: unknown
+): void {
+  const sectionEl = containerEl.createDiv({
+    cls: "agent-dashboard__tool-payload"
+  });
+  sectionEl.createDiv({
+    cls: "agent-dashboard__tool-payload-label",
+    text: label
+  });
+  sectionEl.createEl("pre", {
+    cls: "agent-dashboard__tool-payload-body",
+    text: formatToolPayload(value)
+  });
+}
+
+function inferToolEvent(text: string): AgentToolEvent {
+  const lower = text.toLowerCase();
+  const blocked = lower.includes("blocked") || lower.includes("denied");
+  const allowed = lower.includes("allowed") || lower.includes("added ");
+  const failed = lower.includes("failed") || lower.includes("error");
+  const unexpected = text.match(/Unexpected tool event in no-tools mode: ([\w-]+)/i);
+  const check = text.match(/^([^:]+ check):\s*([^-]+)(?:-\s*(.+))?$/i);
+
+  if (unexpected) {
+    return {
+      eventType: unexpected[1],
+      status: "blocked",
+      title: `Blocked ${unexpected[1].replace(/_/g, " ")}`
+    };
+  }
+
+  if (check) {
+    return {
+      eventType: "safety_check",
+      output: check[3]?.trim(),
+      status: blocked ? "blocked" : failed ? "error" : "info",
+      title: `${check[1]} ${check[2].trim()}`
+    };
+  }
+
+  return {
+    eventType: "dashboard_tool_event",
+    status: blocked ? "blocked" : failed ? "error" : allowed ? "result" : "info",
+    title: text.split("\n")[0] || "Tool event"
+  };
+}
+
+function formatToolPayload(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function getToolStatusIcon(tool: AgentToolEvent): string {
+  if (tool.status === "blocked") {
+    return "shield-alert";
+  }
+
+  if (tool.status === "error") {
+    return "circle-alert";
+  }
+
+  if (tool.status === "result") {
+    return "check-circle";
+  }
+
+  return "wrench";
+}
+
+function renderStatusLogLine(
+  containerEl: HTMLElement,
+  event: AgentEvent
+): void {
+  const logEl = containerEl.createDiv({
+    cls: "agent-dashboard__status-log-line"
+  });
+  const iconEl = logEl.createSpan({
+    cls: "agent-dashboard__status-log-icon"
+  });
+  setIcon(iconEl, "activity");
+  logEl.createSpan({
+    cls: "agent-dashboard__status-log-text",
     text: event.text
   });
+  logEl.createSpan({
+    cls: "agent-dashboard__status-log-time",
+    text: formatEventTime(event.createdAt)
+  });
+}
+
+function renderProposedEdits(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  eventId: string
+): void {
+  const proposedEdits = plugin.getProposedEditsForEvent(eventId);
+  if (proposedEdits.length === 0) {
+    return;
+  }
+
+  const editsEl = containerEl.createDiv({
+    cls: "agent-dashboard__proposed-edits"
+  });
+
+  for (const proposedEdit of proposedEdits) {
+    renderProposedEdit(plugin, editsEl, proposedEdit);
+  }
+}
+
+function renderProposedEdit(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  proposedEdit: ProposedEditRecord
+): void {
+  const cardEl = containerEl.createDiv({
+    cls: "agent-dashboard__proposed-edit"
+  });
+  const headerEl = cardEl.createDiv({
+    cls: "agent-dashboard__proposed-edit-header"
+  });
+  const titleEl = headerEl.createDiv({
+    cls: "agent-dashboard__proposed-edit-title"
+  });
+  titleEl.createSpan({ text: "Proposed edit" });
+  titleEl.createSpan({
+    cls: "agent-dashboard__proposed-edit-path",
+    text: proposedEdit.path
+  });
+
+  const metaEl = headerEl.createDiv({
+    cls: "agent-dashboard__proposed-edit-meta"
+  });
+  metaEl.createSpan({
+    text: proposedEdit.fileExists ? "existing file" : "new file"
+  });
+  metaEl.createSpan({ text: describeProposedEditStatus(proposedEdit) });
+
+  if (proposedEdit.applyError) {
+    cardEl.createDiv({
+      cls: "agent-dashboard__proposed-edit-error",
+      text: proposedEdit.applyError
+    });
+  }
+
+  const diffEl = cardEl.createDiv({
+    cls: "agent-dashboard__diff"
+  });
+  for (const line of proposedEdit.diffLines) {
+    renderDiffLine(diffEl, line);
+  }
+
+  const actionsEl = cardEl.createDiv({
+    cls: "agent-dashboard__proposed-edit-actions"
+  });
+  new ButtonComponent(actionsEl)
+    .setButtonText("Open")
+    .setTooltip("Open target note")
+    .setDisabled(!proposedEdit.fileExists)
+    .onClick(() => {
+      void plugin.openVaultFilePath(proposedEdit.path);
+    });
+
+  const applyState = getProposedEditApplyState(proposedEdit);
+  new ButtonComponent(actionsEl)
+    .setButtonText(applyState.label)
+    .setTooltip(applyState.tooltip)
+    .setDisabled(!applyState.enabled)
+    .onClick(() => {
+      void plugin.applyProposedEdit(proposedEdit.id);
+    });
+}
+
+function describeProposedEditStatus(proposedEdit: ProposedEditRecord): string {
+  if (proposedEdit.status === "apply-error") {
+    return "blocked";
+  }
+
+  return proposedEdit.status.replace("-", " ");
+}
+
+function getProposedEditApplyState(
+  proposedEdit: ProposedEditRecord
+): { enabled: boolean; label: string; tooltip: string } {
+  if (proposedEdit.status === "approved") {
+    return {
+      enabled: true,
+      label: "Apply",
+      tooltip: "Apply approved edit through Obsidian vault APIs"
+    };
+  }
+
+  if (proposedEdit.status === "applied") {
+    return {
+      enabled: false,
+      label: "Applied",
+      tooltip: "This edit has already been applied"
+    };
+  }
+
+  if (proposedEdit.status === "denied") {
+    return {
+      enabled: false,
+      label: "Denied",
+      tooltip: "This edit was denied"
+    };
+  }
+
+  if (proposedEdit.status === "apply-error") {
+    return {
+      enabled: false,
+      label: "Blocked",
+      tooltip: proposedEdit.applyError || "This edit cannot be applied"
+    };
+  }
+
+  return {
+    enabled: false,
+    label: "Approve first",
+    tooltip: "Approve the queued write request before applying"
+  };
+}
+
+function renderDiffLine(
+  containerEl: HTMLElement,
+  line: ProposedEditDiffLine
+): void {
+  const lineEl = containerEl.createDiv({
+    cls: `agent-dashboard__diff-line agent-dashboard__diff-line--${line.kind}`
+  });
+  lineEl.createSpan({
+    cls: "agent-dashboard__diff-old-line",
+    text: line.oldLineNumber ? String(line.oldLineNumber) : ""
+  });
+  lineEl.createSpan({
+    cls: "agent-dashboard__diff-new-line",
+    text: line.newLineNumber ? String(line.newLineNumber) : ""
+  });
+  lineEl.createSpan({
+    cls: "agent-dashboard__diff-marker",
+    text: getDiffMarker(line)
+  });
+  lineEl.createSpan({
+    cls: "agent-dashboard__diff-text",
+    text: line.text || " "
+  });
+}
+
+function getDiffMarker(line: ProposedEditDiffLine): string {
+  if (line.kind === "added") {
+    return "+";
+  }
+
+  if (line.kind === "removed") {
+    return "-";
+  }
+
+  return " ";
+}
+
+function linkInlineReferencedFiles(
+  plugin: AgentDashboardPlugin,
+  rootEl: HTMLElement
+): void {
+  const candidates = getInlineFileReferenceCandidates(plugin);
+  if (candidates.length === 0) {
+    return;
+  }
+
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(
+    rootEl,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (!node.textContent?.trim()) {
+          return NodeFilter.FILTER_REJECT;
+        }
+
+        return isInlineLinkableTextNode(node)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      }
+    }
+  );
+
+  let currentNode = walker.nextNode();
+  while (currentNode) {
+    textNodes.push(currentNode as Text);
+    currentNode = walker.nextNode();
+  }
+
+  for (const textNode of textNodes) {
+    replaceInlineFileReferences(plugin, textNode, candidates);
+  }
+}
+
+function getInlineFileReferenceCandidates(
+  plugin: AgentDashboardPlugin
+): { file: TFile; text: string }[] {
+  return plugin.app.vault.getMarkdownFiles()
+    .flatMap((file) => {
+      const candidates = [{ file, text: file.path }];
+      const withoutExtension = file.path.replace(/\.md$/i, "");
+      if (withoutExtension !== file.path && withoutExtension.includes("/")) {
+        candidates.push({ file, text: withoutExtension });
+      }
+
+      return candidates;
+    })
+    .sort((a, b) => b.text.length - a.text.length);
+}
+
+function isInlineLinkableTextNode(node: Node): boolean {
+  let parent = node.parentElement;
+  while (parent) {
+    if (
+      [
+        "A",
+        "BUTTON",
+        "CODE",
+        "MJX-CONTAINER",
+        "PRE",
+        "SCRIPT",
+        "STYLE",
+        "TEXTAREA"
+      ].includes(parent.tagName)
+    ) {
+      return false;
+    }
+
+    parent = parent.parentElement;
+  }
+
+  return true;
+}
+
+function replaceInlineFileReferences(
+  plugin: AgentDashboardPlugin,
+  textNode: Text,
+  candidates: { file: TFile; text: string }[]
+): void {
+  const text = textNode.textContent ?? "";
+  const fragment = textNode.ownerDocument.createDocumentFragment();
+  let offset = 0;
+  let changed = false;
+
+  while (offset < text.length) {
+    const match = findNextInlineFileReference(text, offset, candidates);
+    if (!match) {
+      break;
+    }
+
+    if (match.index > offset) {
+      fragment.append(text.slice(offset, match.index));
+    }
+
+    const linkEl = textNode.ownerDocument.createElement("a");
+    linkEl.addClass("agent-dashboard__inline-file-link");
+    linkEl.href = "#";
+    linkEl.textContent = text.slice(match.index, match.index + match.length);
+    linkEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      void plugin.app.workspace.getLeaf(false).openFile(match.file);
+    });
+    fragment.append(linkEl);
+    offset = match.index + match.length;
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  if (offset < text.length) {
+    fragment.append(text.slice(offset));
+  }
+
+  textNode.replaceWith(fragment);
+}
+
+function findNextInlineFileReference(
+  text: string,
+  offset: number,
+  candidates: { file: TFile; text: string }[]
+): { file: TFile; index: number; length: number } | undefined {
+  let bestMatch: { file: TFile; index: number; length: number } | undefined;
+
+  for (const candidate of candidates) {
+    let index = text.indexOf(candidate.text, offset);
+    while (index !== -1) {
+      const end = index + candidate.text.length;
+      if (isInlineFileReferenceBoundary(text, index, end)) {
+        if (
+          !bestMatch ||
+          index < bestMatch.index ||
+          (index === bestMatch.index && candidate.text.length > bestMatch.length)
+        ) {
+          bestMatch = {
+            file: candidate.file,
+            index,
+            length: candidate.text.length
+          };
+        }
+        break;
+      }
+
+      index = text.indexOf(candidate.text, index + 1);
+    }
+  }
+
+  return bestMatch;
+}
+
+function isInlineFileReferenceBoundary(
+  text: string,
+  start: number,
+  end: number
+): boolean {
+  const before = text[start - 1];
+  const after = text[end];
+  const validBefore = before === undefined || /[\s"'`([{:@]/.test(before);
+  const validAfter = after === undefined || /[\s"'`),.;:!?}\]]/.test(after);
+
+  return validBefore && validAfter;
+}
+
+function renderReferencedFiles(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  text: string
+): void {
+  const referencedFiles = findReferencedVaultFiles(plugin, text);
+  if (referencedFiles.length === 0) {
+    return;
+  }
+
+  const filesEl = containerEl.createDiv({
+    cls: "agent-dashboard__referenced-files"
+  });
+  filesEl.createSpan({
+    cls: "agent-dashboard__referenced-label",
+    text: "Files"
+  });
+
+  for (const file of referencedFiles) {
+    const fileEl = filesEl.createEl("button", {
+      cls: "agent-dashboard__referenced-file",
+      text: file.path,
+      type: "button"
+    });
+    fileEl.addEventListener("click", async () => {
+      await plugin.app.workspace.getLeaf(false).openFile(file);
+    });
+  }
+}
+
+function findReferencedVaultFiles(
+  plugin: AgentDashboardPlugin,
+  text: string
+): TFile[] {
+  const files = plugin.app.vault.getMarkdownFiles();
+  const matches: TFile[] = [];
+
+  for (const file of files) {
+    if (isFilePathMentioned(text, file.path) && !matches.includes(file)) {
+      matches.push(file);
+    }
+  }
+
+  return matches.slice(0, 8);
+}
+
+function isFilePathMentioned(text: string, filePath: string): boolean {
+  if (text.includes(filePath)) {
+    return true;
+  }
+
+  const withoutExtension = filePath.replace(/\.md$/i, "");
+  return withoutExtension !== filePath && text.includes(withoutExtension);
 }
 
 function getAgentEventLabel(event: AgentEvent): string {
@@ -514,6 +1604,20 @@ function formatEventTime(value: string): string {
   return date.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit"
+  });
+}
+
+function formatSessionDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString([], {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short"
   });
 }
 

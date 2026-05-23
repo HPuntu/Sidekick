@@ -1,11 +1,28 @@
-import { FileSystemAdapter, Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import {
+  App,
+  ButtonComponent,
+  FileSystemAdapter,
+  MarkdownFileInfo,
+  Modal,
+  Notice,
+  Plugin,
+  TFile,
+  WorkspaceLeaf
+} from "obsidian";
+import path from "path";
 
 import {
   AgentEvent,
   AgentEventKind,
   AgentSessionStatus,
+  AgentToolEvent,
   createAgentEvent
 } from "./agent/AgentSession";
+import {
+  createLineDiff,
+  parseProposedEditsFromMarkdown,
+  ProposedEditDiffLine
+} from "./agent/ProposedEdit";
 import { BridgeService } from "./bridge/BridgeService";
 import {
   createCheckingOllamaSnapshot,
@@ -22,6 +39,12 @@ import {
   createUnknownPiRpcDiscoverySnapshot,
   PiRpcDiscoverySnapshot
 } from "./bridge/pi/PiRpcDiscovery";
+import {
+  PiReadOnlyPromptRun,
+  PiSessionState,
+  PiToolEvent,
+  setPiRpcModel
+} from "./bridge/pi/PiReadOnlyPrompt";
 import { registerAgentDashboardBlock } from "./markdown/agentDashboardBlock";
 import {
   ApprovalRecord,
@@ -46,6 +69,90 @@ import {
   AgentDashboardView
 } from "./views/AgentDashboardView";
 
+const MAX_CONTEXT_CHARS = 20000;
+const MAX_MENTIONED_FILES = 5;
+const DEFAULT_CHAT_EXPORT_FOLDER = "Chats";
+
+export type AgentPromptContextMode = "none" | "note" | "selection";
+export type AgentDashboardAgentView = "chat" | "history";
+
+interface PromptContextBlock {
+  eventText: string;
+  promptPrefix: string;
+}
+
+interface MentionedVaultFileReference {
+  end: number;
+  file: TFile;
+  mention: string;
+  start: number;
+}
+
+export interface AgentSessionHistoryItem {
+  createdAt: string;
+  lastMessage: string;
+  messageCount?: number;
+  name: string;
+  piSessionId?: string;
+  title: string;
+  updatedAt: string;
+}
+
+export type ProposedEditStatus =
+  | "applied"
+  | "apply-error"
+  | "approved"
+  | "denied"
+  | "pending-approval";
+
+export interface ProposedEditRecord {
+  approvalId?: string;
+  applyError?: string;
+  createdAt: string;
+  diffLines: ProposedEditDiffLine[];
+  eventId: string;
+  fileExists: boolean;
+  id: string;
+  originalText: string;
+  path: string;
+  replacementText: string;
+  status: ProposedEditStatus;
+}
+
+interface PersistedAgentDashboardData {
+  agentSession?: PersistedAgentSessionState;
+  agentSessions?: PersistedAgentSessionsState;
+  schemaVersion?: number;
+  settings?: Partial<AgentDashboardSettings>;
+}
+
+interface PersistedAgentSessionsState {
+  currentSessionName?: string;
+  records?: PersistedAgentSessionRecord[];
+  viewMode?: AgentDashboardAgentView;
+}
+
+interface PersistedAgentSessionRecord extends PersistedAgentSessionState {
+  createdAt: string;
+  lastMessage?: string;
+  messageCount?: number;
+  name: string;
+  title: string;
+}
+
+interface PersistedAgentSessionState {
+  agentEventCounter?: number;
+  approvalCounter?: number;
+  approvalRecords?: ApprovalRecord[];
+  events?: AgentEvent[];
+  piSessionId?: string;
+  piSessionMessageCount?: number;
+  piSessionPath?: string;
+  proposedEditCounter?: number;
+  proposedEdits?: ProposedEditRecord[];
+  updatedAt?: string;
+}
+
 export default class AgentDashboardPlugin extends Plugin {
   agentEvents: AgentEvent[] = [];
   agentSessionStatus: AgentSessionStatus = "idle";
@@ -62,9 +169,19 @@ export default class AgentDashboardPlugin extends Plugin {
     createUnknownPiRpcDiscoverySnapshot(DEFAULT_SETTINGS.piExecutablePath);
   safetyAuditLog: SafetyDecision[] = [];
   settings: AgentDashboardSettings = DEFAULT_SETTINGS;
+  proposedEdits: ProposedEditRecord[] = [];
+  agentSessionHistory: AgentSessionHistoryItem[] = [];
+  agentViewMode: AgentDashboardAgentView = "history";
+  piSessionId?: string;
+  piSessionMessageCount?: number;
+  piSessionPath?: string;
   private agentEventCounter = 0;
   private approvalCounter = 0;
-  private mockRunTimer?: number;
+  private proposedEditCounter = 0;
+  private activePromptRun?: PiReadOnlyPromptRun;
+  private agentSessionRecords: PersistedAgentSessionRecord[] = [];
+  private lastMarkdownFileInfo: MarkdownFileInfo | null = null;
+  private savePluginDataTimeout?: number;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -84,8 +201,9 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.addAgentEvent(
       "status",
-      "Agent shell ready in read-only mode. Shell commands and file writes are blocked."
+      `Persistent agent session ready: ${this.settings.agentSessionName}. Shell commands and deletes are blocked; approved vault Markdown edits can be applied.`
     );
+    this.agentViewMode = "history";
 
     this.registerView(
       AGENT_DASHBOARD_VIEW_TYPE,
@@ -94,6 +212,18 @@ export default class AgentDashboardPlugin extends Plugin {
 
     registerAgentDashboardBlock(this);
     this.addSettingTab(new AgentDashboardSettingTab(this.app, this));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.rememberActiveMarkdownFileInfo();
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("editor-change", (_editor, info) => {
+        if (info.file) {
+          this.lastMarkdownFileInfo = info;
+        }
+      })
+    );
 
     this.addRibbonIcon("bot", "Open Agent Dashboard", async () => {
       await this.activateView();
@@ -184,6 +314,22 @@ export default class AgentDashboardPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "start-new-agent-session",
+      name: "Start new persistent agent session",
+      callback: () => {
+        void this.startNewAgentSession();
+      }
+    });
+
+    this.addCommand({
+      id: "export-agent-chat",
+      name: "Export active agent chat to Markdown",
+      callback: () => {
+        this.openChatExportModal();
+      }
+    });
+
+    this.addCommand({
       id: "run-agent-safety-self-check",
       name: "Run agent safety self-check",
       callback: () => {
@@ -205,10 +351,12 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
-    if (this.mockRunTimer !== undefined) {
-      window.clearTimeout(this.mockRunTimer);
+    if (this.activePromptRun) {
+      this.activePromptRun.abort();
+      this.activePromptRun = undefined;
     }
 
+    await this.flushPluginDataSave();
     await this.bridge.stop();
     this.app.workspace.detachLeavesOfType(AGENT_DASHBOARD_VIEW_TYPE);
   }
@@ -239,11 +387,163 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = await this.loadData();
+    const settings = getPersistedSettings(data);
+    this.settings = normalizeSettings(
+      Object.assign({}, DEFAULT_SETTINGS, settings)
+    );
+    this.restorePersistedAgentSessions(data);
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    await this.savePluginData();
+  }
+
+  resetPiSessionMetadata(): void {
+    this.piSessionId = undefined;
+    this.piSessionMessageCount = undefined;
+    this.piSessionPath = undefined;
+    this.queuePluginDataSave();
+  }
+
+  async startNewAgentSession(): Promise<void> {
+    if (this.agentSessionStatus === "running") {
+      new Notice("Stop the current agent run before starting a new session");
+      return;
+    }
+
+    this.saveCurrentSessionToHistory();
+    this.settings.agentSessionName = createAgentSessionName();
+    this.resetPiSessionMetadata();
+    this.agentEvents = [];
+    this.approvalRecords = [];
+    this.proposedEdits = [];
+    this.agentEventCounter = 0;
+    this.approvalCounter = 0;
+    this.proposedEditCounter = 0;
+    this.agentViewMode = "chat";
+    this.addAgentEvent(
+      "status",
+      `Started new persistent agent session: ${this.settings.agentSessionName}.`
+    );
+    await this.savePluginData();
+    this.refreshDashboardViews();
+  }
+
+  async openAgentSession(name: string): Promise<void> {
+    if (this.agentSessionStatus === "running") {
+      new Notice("Stop the current agent run before switching sessions");
+      return;
+    }
+
+    this.saveCurrentSessionToHistory();
+    const session = this.getPersistedSessionRecord(name);
+    if (!session) {
+      new Notice(`Session not found: ${name}`);
+      return;
+    }
+
+    this.restorePersistedAgentSession(session);
+    this.settings.agentSessionName = session.name;
+    this.agentViewMode = "chat";
+    await this.savePluginData();
+    this.refreshDashboardViews();
+  }
+
+  async showAgentHistory(): Promise<void> {
+    if (this.agentSessionStatus === "running") {
+      new Notice("Stop the current agent run before leaving chat");
+      return;
+    }
+
+    this.saveCurrentSessionToHistory();
+    this.agentViewMode = "history";
+    await this.savePluginData();
+    this.refreshDashboardViews();
+  }
+
+  async showActiveAgentSession(): Promise<void> {
+    this.agentViewMode = "chat";
+    await this.savePluginData();
+    this.refreshDashboardViews();
+  }
+
+  getAgentSessionHistory(): AgentSessionHistoryItem[] {
+    this.saveCurrentSessionToHistory();
+    return [...this.agentSessionHistory].sort(
+      (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
+    );
+  }
+
+  getAgentSessionSummary(): string {
+    const parts = [this.settings.agentSessionName || DEFAULT_SETTINGS.agentSessionName];
+
+    if (this.piSessionMessageCount !== undefined) {
+      parts.push(`${this.piSessionMessageCount} messages`);
+    }
+
+    if (this.piSessionId) {
+      parts.push(this.piSessionId.slice(0, 8));
+    }
+
+    return parts.join(" · ");
+  }
+
+  getSuggestedChatExportPath(): string {
+    const record = this.createCurrentSessionRecord();
+    const title = record.title || this.settings.agentSessionName || "chat";
+    const fileName = `${slugifyFileName(title)}.md`;
+    return `${DEFAULT_CHAT_EXPORT_FOLDER}/${fileName}`;
+  }
+
+  openChatExportModal(): void {
+    if (countConversationMessages(this.agentEvents) === 0) {
+      new Notice("No chat messages to export yet");
+      return;
+    }
+
+    new AgentChatExportModal(this.app, this).open();
+  }
+
+  async exportActiveAgentChat(exportPath: string): Promise<void> {
+    if (this.agentSessionStatus === "running") {
+      new Notice("Stop the current agent run before exporting");
+      return;
+    }
+
+    const record = this.createCurrentSessionRecord();
+    if (countConversationMessages(record.events ?? []) === 0) {
+      new Notice("No chat messages to export yet");
+      return;
+    }
+
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeChatExportPath(exportPath);
+    } catch (error) {
+      new Notice(getErrorMessage(error));
+      return;
+    }
+
+    const folderPath = path.posix.dirname(normalizedPath);
+    if (folderPath && folderPath !== ".") {
+      await this.ensureVaultFolder(folderPath);
+    }
+
+    const outputPath = await this.getAvailableVaultPath(normalizedPath);
+    const markdown = buildChatExportMarkdown(record, {
+      exportedAt: new Date().toISOString(),
+      model: this.settings.selectedPiModel,
+      pluginVersion: this.manifest.version
+    });
+
+    await this.app.vault.create(outputPath, markdown);
+    new Notice(`Exported chat to ${outputPath}`);
+
+    const exportedFile = this.app.vault.getFileByPath(outputPath);
+    if (exportedFile) {
+      await this.app.workspace.getLeaf(false).openFile(exportedFile);
+    }
   }
 
   resetOllamaStatus(): void {
@@ -330,6 +630,7 @@ export default class AgentDashboardPlugin extends Plugin {
     }
 
     if (this.piRpcDiscoverySnapshot.status === "ready") {
+      this.selectDefaultPiModelIfNeeded();
       new Notice("Pi RPC discovery ready");
       return;
     }
@@ -337,7 +638,10 @@ export default class AgentDashboardPlugin extends Plugin {
     new Notice(`Pi RPC discovery failed: ${this.piRpcDiscoverySnapshot.error}`);
   }
 
-  sendAgentPrompt(prompt: string): boolean {
+  async sendAgentPrompt(
+    prompt: string,
+    contextMode: AgentPromptContextMode = "none"
+  ): Promise<boolean> {
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
       new Notice("Enter a prompt first");
@@ -349,44 +653,72 @@ export default class AgentDashboardPlugin extends Plugin {
       return false;
     }
 
-    this.addAgentEvent("user", trimmedPrompt);
-    this.agentSessionStatus = "running";
-    const piDecision = this.assessSafetyRequest({
-      kind: "shell",
-      command: `${this.settings.piExecutablePath} --mode rpc`,
-      description: "Start Pi RPC session"
-    });
-    this.enqueueApproval(piDecision);
-    this.addAgentEvent(
-      "tool",
-      `Safety guard queued Pi session approval: ${piDecision.reason}`
-    );
-    this.addAgentEvent("status", "Mock read-only agent run started.");
-    this.refreshDashboardViews();
+    const contextBlocks: PromptContextBlock[] = [];
+    if (contextMode !== "none") {
+      const context = await this.buildPromptContext(contextMode);
+      if (!context) {
+        return false;
+      }
 
-    this.mockRunTimer = window.setTimeout(() => {
-      this.mockRunTimer = undefined;
-      this.addAgentEvent("assistant", this.createMockAgentReply(trimmedPrompt));
+      contextBlocks.push(context);
+    }
+
+    const mentionContext = await this.buildMentionedFileContext(trimmedPrompt);
+    if (!mentionContext) {
+      return false;
+    }
+
+    contextBlocks.push(...mentionContext);
+    for (const context of contextBlocks) {
+      this.addAgentEvent("tool", context.eventText);
+    }
+
+    const promptForPi = [
+      ...contextBlocks.map((context) => context.promptPrefix),
+      getEditProposalInstructions(),
+      trimmedPrompt
+    ].join("\n\n");
+
+    this.addAgentEvent("user", trimmedPrompt);
+    this.agentViewMode = "chat";
+    this.agentSessionStatus = "running";
+    const sessionPath = this.getPiSessionPath();
+    const promptDecision = this.assessSafetyRequest({
+      kind: "prompt",
+      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} --no-tools`,
+      description: "Run Pi read-only prompt"
+    });
+
+    if (!promptDecision.allowed) {
       this.agentSessionStatus = "idle";
       this.addAgentEvent(
-        "status",
-        "Mock run complete. Pi RPC streaming will be enabled after approval gates are implemented."
+        "tool",
+        `Safety guard blocked prompt: ${promptDecision.reason}`
       );
       this.refreshDashboardViews();
-    }, 800);
+      return false;
+    }
+
+    this.addAgentEvent(
+      "tool",
+      `Safety guard allowed read-only prompt: ${promptDecision.reason}`
+    );
+    this.addAgentEvent("status", "Starting Pi read-only prompt.");
+    this.refreshDashboardViews();
+    this.startReadOnlyPiPrompt(promptForPi, sessionPath);
 
     return true;
   }
 
   stopAgentRun(): void {
-    if (this.mockRunTimer !== undefined) {
-      window.clearTimeout(this.mockRunTimer);
-      this.mockRunTimer = undefined;
+    if (this.activePromptRun) {
+      this.activePromptRun.abort();
+      this.activePromptRun = undefined;
     }
 
     if (this.agentSessionStatus === "running") {
       this.agentSessionStatus = "idle";
-      this.addAgentEvent("status", "Mock agent run stopped.");
+      this.addAgentEvent("status", "Pi read-only prompt stopped.");
       this.refreshDashboardViews();
     }
   }
@@ -417,11 +749,19 @@ export default class AgentDashboardPlugin extends Plugin {
 
     record.status = "approved";
     record.decidedAt = new Date().toISOString();
-    record.note =
-      "Approval recorded only. Read-only mode still prevents execution.";
+    const proposedEdit = this.proposedEdits.find(
+      (edit) => edit.approvalId === record.id
+    );
+    if (proposedEdit) {
+      proposedEdit.status = "approved";
+      record.note = "Approval recorded. Apply from the proposed edit card.";
+    } else {
+      record.note =
+        "Approval recorded only. No execution path is available for this request.";
+    }
     this.addAgentEvent(
       "tool",
-      `Approval recorded for ${describeSafetyRequest(record.decision.request)}. Execution remains disabled.`
+      `Approval recorded for ${describeSafetyRequest(record.decision.request)}.`
     );
     this.refreshDashboardViews();
   }
@@ -435,6 +775,12 @@ export default class AgentDashboardPlugin extends Plugin {
     record.status = "denied";
     record.decidedAt = new Date().toISOString();
     record.note = "Denied by user.";
+    const proposedEdit = this.proposedEdits.find(
+      (edit) => edit.approvalId === record.id
+    );
+    if (proposedEdit) {
+      proposedEdit.status = "denied";
+    }
     this.addAgentEvent(
       "tool",
       `Approval denied for ${describeSafetyRequest(record.decision.request)}.`
@@ -451,7 +797,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     return {
       allowedRoots,
-      mode: "read-only",
+      mode: "reviewed-edits",
       pendingApprovals: countPendingApprovals(this.approvalRecords),
       vaultRoot
     };
@@ -459,6 +805,164 @@ export default class AgentDashboardPlugin extends Plugin {
 
   getPendingApprovalRecords(): ApprovalRecord[] {
     return this.approvalRecords.filter((record) => record.status === "pending");
+  }
+
+  getProposedEditsForEvent(eventId: string): ProposedEditRecord[] {
+    return this.proposedEdits.filter((record) => record.eventId === eventId);
+  }
+
+  async openVaultFilePath(vaultPath: string): Promise<void> {
+    const file = this.app.vault.getFileByPath(vaultPath);
+    if (!file) {
+      new Notice(`File not found: ${vaultPath}`);
+      return;
+    }
+
+    await this.app.workspace.getLeaf(false).openFile(file);
+  }
+
+  async applyProposedEdit(id: string): Promise<void> {
+    const proposedEdit = this.proposedEdits.find((record) => record.id === id);
+    if (!proposedEdit) {
+      new Notice("Proposed edit not found");
+      return;
+    }
+
+    const approval = proposedEdit.approvalId
+      ? this.approvalRecords.find((record) => record.id === proposedEdit.approvalId)
+      : undefined;
+    if (!approval || approval.status !== "approved") {
+      new Notice("Approve the proposed edit before applying it");
+      return;
+    }
+
+    if (!proposedEdit.path.toLowerCase().endsWith(".md")) {
+      proposedEdit.status = "apply-error";
+      proposedEdit.applyError = "Only Markdown files can be applied.";
+      this.addAgentEvent(
+        "tool",
+        `Apply blocked for ${proposedEdit.path}: only Markdown files can be applied.`
+      );
+      this.refreshDashboardViews();
+      return;
+    }
+
+    const targetPath = this.getVaultPathAbsolutePath(proposedEdit.path);
+    const applyDecision = this.assessSafetyRequest({
+      description: `Apply approved proposed edit to ${proposedEdit.path}`,
+      kind: "approved-write",
+      targetPath
+    });
+
+    if (!applyDecision.allowed) {
+      proposedEdit.status = "apply-error";
+      proposedEdit.applyError = applyDecision.reason;
+      this.addAgentEvent(
+        "tool",
+        `Apply blocked for ${proposedEdit.path}: ${applyDecision.reason}`
+      );
+      this.refreshDashboardViews();
+      return;
+    }
+
+    const existingFile = this.app.vault.getFileByPath(proposedEdit.path);
+    if (proposedEdit.fileExists) {
+      if (!existingFile) {
+        this.markProposedEditStale(
+          proposedEdit,
+          "Target file no longer exists."
+        );
+        return;
+      }
+
+      const currentText = await this.app.vault.read(existingFile);
+      if (currentText !== proposedEdit.originalText) {
+        this.markProposedEditStale(
+          proposedEdit,
+          "Target file changed after the diff was generated."
+        );
+        return;
+      }
+
+      await this.app.vault.modify(existingFile, proposedEdit.replacementText);
+      this.markProposedEditApplied(proposedEdit);
+      return;
+    }
+
+    if (existingFile) {
+      this.markProposedEditStale(
+        proposedEdit,
+        "Target file was created after the diff was generated."
+      );
+      return;
+    }
+
+    try {
+      await this.app.vault.create(proposedEdit.path, proposedEdit.replacementText);
+      proposedEdit.fileExists = true;
+      this.markProposedEditApplied(proposedEdit);
+    } catch (error) {
+      proposedEdit.status = "apply-error";
+      proposedEdit.applyError = getErrorMessage(error);
+      this.addAgentEvent(
+        "tool",
+        `Apply failed for ${proposedEdit.path}: ${proposedEdit.applyError}`
+      );
+      this.refreshDashboardViews();
+    }
+  }
+
+  async selectPiModel(modelLabel: string): Promise<void> {
+    this.settings.selectedPiModel = modelLabel;
+    await this.saveSettings();
+    if (!modelLabel) {
+      this.addAgentEvent("status", "Cleared selected Pi model.");
+      this.refreshDashboardViews();
+      return;
+    }
+
+    if (this.agentSessionStatus === "running") {
+      this.addAgentEvent(
+        "status",
+        `Selected Pi model for the next run: ${modelLabel}.`
+      );
+      this.refreshDashboardViews();
+      return;
+    }
+
+    const result = await setPiRpcModel(
+      this.settings.piExecutablePath,
+      this.getPiSessionPath(),
+      modelLabel
+    );
+
+    if (result.success) {
+      if (result.sessionState) {
+        this.rememberPiSessionState(result.sessionState);
+      }
+      this.addAgentEvent("status", `Set active Pi session model: ${modelLabel}.`);
+    } else {
+      this.addAgentEvent(
+        "status",
+        `Selected Pi model for future runs, but set_model failed: ${result.error ?? "unknown error"}`
+      );
+    }
+    this.refreshDashboardViews();
+  }
+
+  getVaultFileSuggestions(query: string, limit = 8): string[] {
+    const normalizedQuery = normalizeMentionedPath(query)
+      .replace(/^\[\[/, "")
+      .toLowerCase();
+    const scoredFiles = this.app.vault.getMarkdownFiles()
+      .map((file) => ({
+        path: file.path,
+        score: scoreVaultFileSuggestion(file.path, normalizedQuery)
+      }))
+      .filter((item) => item.score < Number.POSITIVE_INFINITY)
+      .sort((a, b) => a.score - b.score || a.path.localeCompare(b.path));
+
+    return scoredFiles.slice(0, limit).map((item) => item.path);
   }
 
   runSafetySelfCheck(): void {
@@ -516,6 +1020,169 @@ export default class AgentDashboardPlugin extends Plugin {
     new Notice(`Agent Dashboard bridge ${status}`);
   }
 
+  private restorePersistedAgentSession(
+    state: PersistedAgentSessionState | undefined
+  ): void {
+    if (!state) {
+      return;
+    }
+
+    this.agentEvents = Array.isArray(state.events) ? state.events.slice(-60) : [];
+    this.approvalRecords = Array.isArray(state.approvalRecords)
+      ? state.approvalRecords.slice(0, 40)
+      : [];
+    this.proposedEdits = Array.isArray(state.proposedEdits)
+      ? state.proposedEdits.slice(0, 40)
+      : [];
+    this.piSessionId = state.piSessionId;
+    this.piSessionMessageCount = state.piSessionMessageCount;
+    this.piSessionPath = state.piSessionPath;
+    this.agentEventCounter =
+      state.agentEventCounter ?? getMaxIdCounter(this.agentEvents, "agent-event-");
+    this.approvalCounter =
+      state.approvalCounter ?? getMaxIdCounter(this.approvalRecords, "approval-");
+    this.proposedEditCounter =
+      state.proposedEditCounter ??
+      getMaxIdCounter(this.proposedEdits, "proposed-edit-");
+  }
+
+  private restorePersistedAgentSessions(data: unknown): void {
+    const sessions = getPersistedAgentSessions(data);
+    if (!sessions) {
+      this.restorePersistedAgentSession(getPersistedAgentSession(data));
+      this.saveCurrentSessionToHistory();
+      return;
+    }
+
+    const records = Array.isArray(sessions.records)
+      ? sessions.records.filter(isPersistedAgentSessionRecord)
+      : [];
+    this.agentSessionRecords = records;
+    this.agentSessionHistory = records.map((record) =>
+      getHistoryItemForSessionRecord(record)
+    );
+    this.agentViewMode = sessions.viewMode ?? "history";
+
+    const currentName =
+      sessions.currentSessionName ||
+      this.settings.agentSessionName ||
+      DEFAULT_SETTINGS.agentSessionName;
+    const currentRecord =
+      records.find((record) => record.name === currentName) ?? records[0];
+
+    if (currentRecord) {
+      this.settings.agentSessionName = currentRecord.name;
+      this.restorePersistedAgentSession(currentRecord);
+    }
+  }
+
+  private saveCurrentSessionToHistory(): void {
+    const record = this.createCurrentSessionRecord();
+    this.agentSessionRecords = [
+      record,
+      ...this.agentSessionRecords.filter((item) => item.name !== record.name)
+    ].slice(0, 24);
+    this.agentSessionHistory = [
+      getHistoryItemForSessionRecord(record),
+      ...this.agentSessionHistory.filter((item) => item.name !== record.name)
+    ].slice(0, 24);
+  }
+
+  private getPersistedSessionRecord(
+    name: string
+  ): PersistedAgentSessionRecord | undefined {
+    this.saveCurrentSessionToHistory();
+    return this.agentSessionRecords.find(
+      (record) => record.name === name
+    );
+  }
+
+  private createAllPersistedSessionRecords(): PersistedAgentSessionRecord[] {
+    const currentRecord = this.createCurrentSessionRecord();
+    const historyRecords = this.agentSessionRecords.filter(
+      (item) => item.name !== currentRecord.name
+    );
+
+    return [currentRecord, ...historyRecords].slice(0, 24);
+  }
+
+  private createCurrentSessionRecord(): PersistedAgentSessionRecord {
+    const existing = this.agentSessionHistory.find(
+      (item) => item.name === this.settings.agentSessionName
+    );
+    const updatedAt = new Date().toISOString();
+
+    return {
+      agentEventCounter: this.agentEventCounter,
+      approvalCounter: this.approvalCounter,
+      approvalRecords: this.approvalRecords,
+      createdAt:
+        existing?.createdAt ?? this.agentEvents[0]?.createdAt ?? updatedAt,
+      events: this.agentEvents,
+      lastMessage: getSessionLastMessage(this.agentEvents),
+      messageCount: countConversationMessages(this.agentEvents),
+      name: this.settings.agentSessionName || DEFAULT_SETTINGS.agentSessionName,
+      piSessionId: this.piSessionId,
+      piSessionMessageCount: this.piSessionMessageCount,
+      piSessionPath: this.piSessionPath,
+      proposedEditCounter: this.proposedEditCounter,
+      proposedEdits: this.proposedEdits,
+      title: getSessionTitle(
+        this.agentEvents,
+        existing?.title ?? this.settings.agentSessionName
+      ),
+      updatedAt
+    };
+  }
+
+  private queuePluginDataSave(): void {
+    if (this.savePluginDataTimeout !== undefined) {
+      window.clearTimeout(this.savePluginDataTimeout);
+    }
+
+    this.savePluginDataTimeout = window.setTimeout(() => {
+      this.savePluginDataTimeout = undefined;
+      void this.savePluginData();
+    }, 300);
+  }
+
+  private async flushPluginDataSave(): Promise<void> {
+    if (this.savePluginDataTimeout !== undefined) {
+      window.clearTimeout(this.savePluginDataTimeout);
+      this.savePluginDataTimeout = undefined;
+    }
+
+    await this.savePluginData();
+  }
+
+  private async savePluginData(): Promise<void> {
+    this.saveCurrentSessionToHistory();
+    const sessionRecords = this.createAllPersistedSessionRecords();
+    const data: PersistedAgentDashboardData = {
+      agentSession: {
+        agentEventCounter: this.agentEventCounter,
+        approvalCounter: this.approvalCounter,
+        approvalRecords: this.approvalRecords,
+        events: this.agentEvents,
+        piSessionId: this.piSessionId,
+        piSessionMessageCount: this.piSessionMessageCount,
+        piSessionPath: this.piSessionPath,
+        proposedEditCounter: this.proposedEditCounter,
+        proposedEdits: this.proposedEdits,
+        updatedAt: new Date().toISOString()
+      },
+      agentSessions: {
+        currentSessionName: this.settings.agentSessionName,
+        records: sessionRecords,
+        viewMode: this.agentViewMode
+      },
+      schemaVersion: 3,
+      settings: this.settings
+    };
+
+    await this.saveData(data);
+  }
+
   private getVaultRoot(): string | undefined {
     const adapter = this.app.vault.adapter;
     if (adapter instanceof FileSystemAdapter) {
@@ -525,15 +1192,102 @@ export default class AgentDashboardPlugin extends Plugin {
     return undefined;
   }
 
-  private addAgentEvent(kind: AgentEventKind, text: string): void {
-    this.agentEventCounter += 1;
-    this.agentEvents.push(
-      createAgentEvent(`agent-event-${this.agentEventCounter}`, kind, text)
+  private getPiSessionPath(): string | undefined {
+    const vaultRoot = this.getVaultRoot();
+    if (!vaultRoot) {
+      return undefined;
+    }
+
+    const pluginDir = this.manifest.dir
+      ? path.join(vaultRoot, this.manifest.dir)
+      : path.join(
+          vaultRoot,
+          this.app.vault.configDir,
+          "plugins",
+          this.manifest.id
+        );
+    const sessionName = sanitizeSessionFileName(
+      this.settings.agentSessionName || DEFAULT_SETTINGS.agentSessionName
     );
+
+    return path.join(pluginDir, "pi-sessions", `${sessionName}.jsonl`);
+  }
+
+  private async ensureVaultFolder(folderPath: string): Promise<void> {
+    const normalized = normalizeVaultFolderPath(folderPath);
+    if (!normalized) {
+      return;
+    }
+
+    const segments = normalized.split("/");
+    let currentPath = "";
+    for (const segment of segments) {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      if (await this.app.vault.adapter.exists(currentPath)) {
+        continue;
+      }
+
+      await this.app.vault.createFolder(currentPath);
+    }
+  }
+
+  private async getAvailableVaultPath(vaultPath: string): Promise<string> {
+    if (!(await this.app.vault.adapter.exists(vaultPath))) {
+      return vaultPath;
+    }
+
+    const extension = path.posix.extname(vaultPath) || ".md";
+    const basePath = vaultPath.slice(0, -extension.length);
+    for (let index = 2; index < 1000; index += 1) {
+      const candidate = `${basePath}-${index}${extension}`;
+      if (!(await this.app.vault.adapter.exists(candidate))) {
+        return candidate;
+      }
+    }
+
+    return `${basePath}-${Date.now()}${extension}`;
+  }
+
+  private rememberPiSessionState(state: PiSessionState): void {
+    if (state.sessionFile) {
+      this.piSessionPath = state.sessionFile;
+    }
+
+    if (state.sessionId) {
+      this.piSessionId = state.sessionId;
+    }
+
+    if (state.messageCount !== undefined) {
+      this.piSessionMessageCount = state.messageCount;
+    }
+
+    this.queuePluginDataSave();
+  }
+
+  private addAgentEvent(
+    kind: AgentEventKind,
+    text: string,
+    tool?: AgentToolEvent
+  ): AgentEvent {
+    this.agentEventCounter += 1;
+    const event = createAgentEvent(
+      `agent-event-${this.agentEventCounter}`,
+      kind,
+      text,
+      tool
+    );
+    this.agentEvents.push(event);
 
     if (this.agentEvents.length > 60) {
       this.agentEvents = this.agentEvents.slice(-60);
     }
+
+    this.queuePluginDataSave();
+    return event;
+  }
+
+  private addToolEvent(event: AgentToolEvent): AgentEvent {
+    return this.addAgentEvent("tool", event.title, event);
   }
 
   private enqueueApproval(decision: SafetyDecision): ApprovalRecord {
@@ -548,17 +1302,8 @@ export default class AgentDashboardPlugin extends Plugin {
       this.approvalRecords = this.approvalRecords.slice(0, 40);
     }
 
+    this.queuePluginDataSave();
     return record;
-  }
-
-  private createMockAgentReply(prompt: string): string {
-    const model = this.settings.defaultModel || "the selected local model";
-    return [
-      `Mock response for: ${prompt}`,
-      "",
-      `Next stage will send this prompt to Pi using ${model}.`,
-      "For now, this confirms the sidebar event stream, controls, and rendering loop work."
-    ].join("\n");
   }
 
   private createSampleApprovalRequest(): void {
@@ -574,6 +1319,983 @@ export default class AgentDashboardPlugin extends Plugin {
     );
     this.refreshDashboardViews();
   }
+
+  private markProposedEditApplied(proposedEdit: ProposedEditRecord): void {
+    proposedEdit.status = "applied";
+    proposedEdit.applyError = undefined;
+    proposedEdit.originalText = proposedEdit.replacementText;
+    proposedEdit.diffLines = createLineDiff(
+      proposedEdit.replacementText,
+      proposedEdit.replacementText
+    );
+    this.addAgentEvent(
+      "tool",
+      `Applied proposed edit to ${proposedEdit.path}.`
+    );
+    this.refreshDashboardViews();
+  }
+
+  private markProposedEditStale(
+    proposedEdit: ProposedEditRecord,
+    reason: string
+  ): void {
+    proposedEdit.status = "apply-error";
+    proposedEdit.applyError = reason;
+    this.addAgentEvent(
+      "tool",
+      `Apply blocked for ${proposedEdit.path}: ${reason}`
+    );
+    this.refreshDashboardViews();
+  }
+
+  private async recordProposedEdits(
+    eventId: string | undefined,
+    text: string
+  ): Promise<void> {
+    if (!eventId) {
+      return;
+    }
+
+    const parsedEdits = parseProposedEditsFromMarkdown(text);
+    if (parsedEdits.length === 0) {
+      return;
+    }
+
+    let recordedCount = 0;
+    for (const parsedEdit of parsedEdits) {
+      const vaultPath = normalizeProposedEditPath(parsedEdit.path);
+      if (!vaultPath) {
+        this.addAgentEvent(
+          "tool",
+          `Ignored proposed edit with invalid path: ${parsedEdit.path}`
+        );
+        continue;
+      }
+
+      const duplicate = this.proposedEdits.some(
+        (record) =>
+          record.eventId === eventId &&
+          record.path === vaultPath &&
+          record.replacementText === parsedEdit.replacementText
+      );
+      if (duplicate) {
+        continue;
+      }
+
+      const file = this.app.vault.getFileByPath(vaultPath);
+      const originalText = file ? await this.app.vault.read(file) : "";
+      const targetPath = this.getVaultPathAbsolutePath(vaultPath);
+      const decision = this.assessSafetyRequest({
+        description: `Apply proposed edit to ${vaultPath}`,
+        kind: "write",
+        targetPath
+      });
+      const approval = this.enqueueApproval(decision);
+
+      this.proposedEditCounter += 1;
+      this.proposedEdits.unshift({
+        approvalId: approval.id,
+        createdAt: new Date().toISOString(),
+        diffLines: createLineDiff(originalText, parsedEdit.replacementText),
+        eventId,
+        fileExists: file !== null,
+        id: `proposed-edit-${this.proposedEditCounter}`,
+        originalText,
+        path: vaultPath,
+        replacementText: parsedEdit.replacementText,
+        status: "pending-approval"
+      });
+      recordedCount += 1;
+    }
+
+    if (this.proposedEdits.length > 40) {
+      this.proposedEdits = this.proposedEdits.slice(0, 40);
+    }
+
+    if (recordedCount > 0) {
+      this.addAgentEvent(
+        "tool",
+        `Detected ${recordedCount} proposed edit(s). Approve before applying.`
+      );
+      this.refreshDashboardViews();
+    }
+  }
+
+  private async buildPromptContext(
+    mode: Exclude<AgentPromptContextMode, "none">
+  ): Promise<PromptContextBlock | undefined> {
+    const activeInfo = this.getActiveMarkdownFileInfo();
+    const file =
+      mode === "selection"
+        ? activeInfo?.file
+        : this.app.workspace.getActiveFile() ?? activeInfo?.file;
+
+    if (!file) {
+      new Notice("No active note found");
+      return undefined;
+    }
+
+    const targetPath = this.getVaultFileAbsolutePath(file);
+    const readDecision = this.assessSafetyRequest({
+      description:
+        mode === "note" ? "Read current note context" : "Read selection context",
+      kind: "read",
+      targetPath
+    });
+
+    if (!readDecision.allowed) {
+      this.addAgentEvent(
+        "tool",
+        `Safety guard blocked context: ${readDecision.reason}`
+      );
+      this.refreshDashboardViews();
+      return undefined;
+    }
+
+    if (mode === "selection") {
+      const selection = activeInfo?.editor?.getSelection().trim() ?? "";
+      if (!selection) {
+        new Notice("No active editor selection found");
+        return undefined;
+      }
+
+      const text = limitContextText(selection);
+      return {
+        eventText: `Added selection context from ${file.path} (${text.length.toLocaleString()} chars).`,
+        promptPrefix: formatPromptContext("Current selection", file.path, text)
+      };
+    }
+
+    const contents = await this.app.vault.read(file);
+    const text = limitContextText(contents);
+    return {
+      eventText: `Added current note context from ${file.path} (${text.length.toLocaleString()} chars).`,
+      promptPrefix: formatPromptContext("Current note", file.path, text)
+    };
+  }
+
+  private async buildMentionedFileContext(
+    prompt: string
+  ): Promise<PromptContextBlock[] | undefined> {
+    const mentionedFiles = extractMentionedVaultFileReferences(
+      prompt,
+      this.app.vault.getMarkdownFiles()
+    );
+    const unresolvedMentions = extractUnresolvedMentionedVaultPaths(
+      prompt,
+      mentionedFiles
+    );
+
+    if (unresolvedMentions.length > 0) {
+      const unresolvedMention = unresolvedMentions[0];
+      new Notice(`Could not resolve @${unresolvedMention}`);
+      this.addAgentEvent(
+        "tool",
+        `Blocked @ context: @${unresolvedMention} was not found in the vault.`
+      );
+      this.refreshDashboardViews();
+      return undefined;
+    }
+
+    if (mentionedFiles.length === 0) {
+      return [];
+    }
+
+    if (mentionedFiles.length > MAX_MENTIONED_FILES) {
+      new Notice(
+        `Too many @ files. Limit is ${MAX_MENTIONED_FILES} per prompt.`
+      );
+      return undefined;
+    }
+
+    const blocks: PromptContextBlock[] = [];
+    for (const mentionedFile of mentionedFiles) {
+      const file = mentionedFile.file;
+      const targetPath = this.getVaultFileAbsolutePath(file);
+      const readDecision = this.assessSafetyRequest({
+        description: `Read @ file context: ${file.path}`,
+        kind: "read",
+        targetPath
+      });
+
+      if (!readDecision.allowed) {
+        this.addAgentEvent(
+          "tool",
+          `Safety guard blocked @${mentionedFile.mention}: ${readDecision.reason}`
+        );
+        this.refreshDashboardViews();
+        return undefined;
+      }
+
+      const contents = await this.app.vault.read(file);
+      const text = limitContextText(contents);
+      blocks.push({
+        eventText: `Added @ context from ${file.path} (${text.length.toLocaleString()} chars).`,
+        promptPrefix: formatPromptContext("Mentioned file", file.path, text)
+      });
+    }
+
+    return blocks;
+  }
+
+  private getActiveMarkdownFileInfo(): MarkdownFileInfo | null {
+    const activeEditor = this.app.workspace.activeEditor;
+    if (activeEditor?.file) {
+      this.lastMarkdownFileInfo = activeEditor;
+      return activeEditor;
+    }
+
+    return this.lastMarkdownFileInfo;
+  }
+
+  private rememberActiveMarkdownFileInfo(): void {
+    const activeEditor = this.app.workspace.activeEditor;
+    if (activeEditor?.file) {
+      this.lastMarkdownFileInfo = activeEditor;
+    }
+  }
+
+  private getVaultFileAbsolutePath(file: TFile): string {
+    return this.getVaultPathAbsolutePath(file.path);
+  }
+
+  private getVaultPathAbsolutePath(vaultPath: string): string {
+    const vaultRoot = this.getVaultRoot();
+    if (!vaultRoot) {
+      return vaultPath;
+    }
+
+    return path.join(vaultRoot, vaultPath);
+  }
+
+  private selectDefaultPiModelIfNeeded(): void {
+    if (this.settings.selectedPiModel) {
+      return;
+    }
+
+    const currentModel = this.piRpcDiscoverySnapshot.currentModel;
+    const discoveredModels = this.piRpcDiscoverySnapshot.models;
+    const fallbackModel = discoveredModels[0]?.label;
+    const selectedModel = currentModel || fallbackModel;
+
+    if (selectedModel) {
+      this.settings.selectedPiModel = selectedModel;
+      void this.saveSettings();
+    }
+  }
+
+  private startReadOnlyPiPrompt(prompt: string, sessionPath: string | undefined): void {
+    let assistantText = "";
+    let assistantEventId: string | undefined;
+    const selectedModel = this.settings.selectedPiModel;
+
+    this.activePromptRun = new PiReadOnlyPromptRun(
+      {
+        executablePath: this.settings.piExecutablePath,
+        modelLabel: selectedModel,
+        prompt,
+        sessionPath
+      },
+      {
+        onAssistantDelta: (delta) => {
+          assistantText += delta;
+          if (!assistantEventId) {
+            assistantEventId = this.addAgentEvent("assistant", assistantText).id;
+          } else {
+            this.updateAgentEvent(assistantEventId, assistantText);
+          }
+          this.refreshDashboardViews();
+        },
+        onError: (message) => {
+          this.activePromptRun = undefined;
+          this.agentSessionStatus = "error";
+          this.addAgentEvent("status", `Pi read-only prompt failed: ${message}`);
+          this.refreshDashboardViews();
+        },
+        onSessionState: (state) => {
+          this.rememberPiSessionState(state);
+          this.refreshDashboardViews();
+        },
+        onStatus: (message) => {
+          if (message.includes("complete") || message.includes("stopped")) {
+            if (message.includes("complete")) {
+              void this.recordProposedEdits(assistantEventId, assistantText);
+            }
+            this.activePromptRun = undefined;
+            this.agentSessionStatus = "idle";
+          }
+          this.addAgentEvent("status", message);
+          this.refreshDashboardViews();
+        },
+        onToolEvent: (event) => {
+          const decision = this.assessSafetyRequest({
+            description: event.title,
+            kind: "shell"
+          });
+          this.enqueueApproval(decision);
+          this.addToolEvent(createBlockedToolEvent(event));
+          this.refreshDashboardViews();
+        }
+      }
+    );
+
+    this.activePromptRun.start();
+  }
+
+  private updateAgentEvent(id: string, text: string): void {
+    const event = this.agentEvents.find((item) => item.id === id);
+    if (event) {
+      event.text = text;
+      this.queuePluginDataSave();
+    }
+  }
+}
+
+function formatPromptContext(label: string, filePath: string, text: string): string {
+  return [
+    `<obsidian-context label="${label}" path="${filePath}">`,
+    text,
+    "</obsidian-context>"
+  ].join("\n");
+}
+
+function getEditProposalInstructions(): string {
+  return [
+    "<agent-dashboard-edit-format>",
+    "If you propose changes to vault files, include each full-file replacement in this exact fenced format:",
+    "```agent-edit",
+    "path: path/inside/vault.md",
+    "---",
+    "replacement file contents",
+    "```",
+    "Do not claim that edits have been applied. The dashboard will show a diff and require approval.",
+    "</agent-dashboard-edit-format>"
+  ].join("\n");
+}
+
+function createBlockedToolEvent(event: PiToolEvent): AgentToolEvent {
+  return {
+    callId: event.callId,
+    eventType: event.eventType,
+    input: event.input,
+    name: event.name,
+    output: event.output,
+    raw: event.raw,
+    status: "blocked",
+    title: `Blocked ${event.title}`
+  };
+}
+
+interface ChatExportOptions {
+  exportedAt: string;
+  model: string;
+  pluginVersion: string;
+}
+
+class AgentChatExportModal extends Modal {
+  private plugin: AgentDashboardPlugin;
+
+  constructor(app: App, plugin: AgentDashboardPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Export Chat" });
+    contentEl.createEl("p", {
+      text: "Choose a vault path. The default folder is created if needed."
+    });
+
+    const inputEl = contentEl.createEl("input", {
+      attr: {
+        type: "text"
+      },
+      cls: "agent-dashboard__export-path-input"
+    });
+    inputEl.value = this.plugin.getSuggestedChatExportPath();
+    inputEl.focus();
+    inputEl.select();
+
+    const actionsEl = contentEl.createDiv({
+      cls: "agent-dashboard__export-actions"
+    });
+    new ButtonComponent(actionsEl)
+      .setButtonText("Cancel")
+      .onClick(() => {
+        this.close();
+      });
+    new ButtonComponent(actionsEl)
+      .setCta()
+      .setButtonText("Export")
+      .onClick(() => {
+        void this.plugin.exportActiveAgentChat(inputEl.value);
+        this.close();
+      });
+
+    inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void this.plugin.exportActiveAgentChat(inputEl.value);
+        this.close();
+      }
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+function buildChatExportMarkdown(
+  record: PersistedAgentSessionRecord,
+  options: ChatExportOptions
+): string {
+  const title = record.title || record.name;
+  const lines = [
+    "---",
+    `title: ${quoteYamlString(title)}`,
+    `agent_session: ${quoteYamlString(record.name)}`,
+    `exported_at: ${quoteYamlString(options.exportedAt)}`,
+    `model: ${quoteYamlString(options.model || "unknown")}`,
+    `plugin_version: ${quoteYamlString(options.pluginVersion)}`,
+    record.piSessionId
+      ? `pi_session_id: ${quoteYamlString(record.piSessionId)}`
+      : "",
+    `message_count: ${countConversationMessages(record.events ?? [])}`,
+    "---",
+    "",
+    `# ${title}`,
+    "",
+    `Exported: ${options.exportedAt}`,
+    "",
+    `Session: \`${record.name}\``,
+    options.model ? `Model: \`${options.model}\`` : "",
+    "",
+    ...formatChatExportEvents(record.events ?? [])
+  ].filter((line) => line !== undefined);
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatChatExportEvents(events: AgentEvent[]): string[] {
+  const lines: string[] = [];
+  for (const event of events) {
+    if (event.kind === "status") {
+      lines.push(
+        `> **Status ${formatExportTimestamp(event.createdAt)}:** ${event.text}`,
+        ""
+      );
+      continue;
+    }
+
+    if (event.kind === "tool") {
+      lines.push(
+        `<details>`,
+        `<summary>Tool · ${escapeHtml(event.tool?.title ?? event.text)}</summary>`,
+        "",
+        ...formatToolExport(event),
+        "",
+        `</details>`,
+        ""
+      );
+      continue;
+    }
+
+    lines.push(
+      `## ${getExportEventHeading(event)}`,
+      "",
+      event.text.trim() || "_No content_",
+      ""
+    );
+  }
+
+  return lines;
+}
+
+function formatToolExport(event: AgentEvent): string[] {
+  const tool = event.tool;
+  if (!tool) {
+    return [event.text.trim() || "_No details_"];
+  }
+
+  const lines = [
+    `- Status: \`${tool.status}\``,
+    `- Event: \`${tool.eventType}\``,
+    tool.name ? `- Name: \`${tool.name}\`` : "",
+    tool.callId ? `- Call ID: \`${tool.callId}\`` : "",
+    ""
+  ].filter(Boolean);
+
+  if (tool.input !== undefined) {
+    lines.push("Input:", "", "```json", formatJsonForMarkdown(tool.input), "```", "");
+  }
+
+  if (tool.output !== undefined) {
+    lines.push(
+      tool.status === "error" ? "Error:" : "Output:",
+      "",
+      "```json",
+      formatJsonForMarkdown(tool.output),
+      "```",
+      ""
+    );
+  }
+
+  return lines;
+}
+
+function formatJsonForMarkdown(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function getExportEventHeading(event: AgentEvent): string {
+  const label =
+    event.kind === "assistant" ? "Agent" : event.kind === "user" ? "You" : "Event";
+  return `${label} - ${formatExportTimestamp(event.createdAt)}`;
+}
+
+function formatExportTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString();
+}
+
+function quoteYamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function normalizeChatExportPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("Export path cannot be empty.");
+  }
+
+  let normalized = path.posix
+    .normalize(trimmed.replace(/^\/+/, ""))
+    .replace(/^\.\//, "");
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    throw new Error("Export path must stay inside the vault.");
+  }
+
+  if (!normalized.toLowerCase().endsWith(".md")) {
+    normalized = `${normalized}.md`;
+  }
+
+  return normalized;
+}
+
+function normalizeVaultFolderPath(value: string): string {
+  return path.posix
+    .normalize(value.replace(/^\/+/, ""))
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+}
+
+function slugifyFileName(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9._ -]+/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 72);
+
+  return slug || "chat";
+}
+
+function getPersistedSettings(data: unknown): Partial<AgentDashboardSettings> {
+  const record = asPlainRecord(data);
+  if (!record) {
+    return {};
+  }
+
+  if (asPlainRecord(record.settings)) {
+    return record.settings as Partial<AgentDashboardSettings>;
+  }
+
+  return record as Partial<AgentDashboardSettings>;
+}
+
+function getPersistedAgentSession(
+  data: unknown
+): PersistedAgentSessionState | undefined {
+  const record = asPlainRecord(data);
+  const session = asPlainRecord(record?.agentSession);
+  return session as PersistedAgentSessionState | undefined;
+}
+
+function getPersistedAgentSessions(
+  data: unknown
+): PersistedAgentSessionsState | undefined {
+  const record = asPlainRecord(data);
+  const sessions = asPlainRecord(record?.agentSessions);
+  return sessions as PersistedAgentSessionsState | undefined;
+}
+
+function isPersistedAgentSessionRecord(
+  value: unknown
+): value is PersistedAgentSessionRecord {
+  const record = asPlainRecord(value);
+  return typeof record?.name === "string" && typeof record.title === "string";
+}
+
+function getHistoryItemForSessionRecord(
+  record: PersistedAgentSessionRecord
+): AgentSessionHistoryItem {
+  return {
+    createdAt: record.createdAt,
+    lastMessage: record.lastMessage ?? getSessionLastMessage(record.events ?? []),
+    messageCount:
+      record.messageCount ??
+      record.piSessionMessageCount ??
+      countConversationMessages(record.events ?? []),
+    name: record.name,
+    piSessionId: record.piSessionId,
+    title: record.title,
+    updatedAt: record.updatedAt ?? record.createdAt
+  };
+}
+
+function getSessionTitle(events: AgentEvent[], fallback: string): string {
+  const userEvent = events.find((event) => event.kind === "user");
+  const title = userEvent?.text.trim() || fallback;
+  return truncatePlainText(title, 56);
+}
+
+function getSessionLastMessage(events: AgentEvent[]): string {
+  const event = [...events]
+    .reverse()
+    .find((item) => item.kind === "assistant" || item.kind === "user");
+  return event ? truncatePlainText(event.text, 96) : "";
+}
+
+function countConversationMessages(events: AgentEvent[]): number {
+  return events.filter(
+    (event) => event.kind === "assistant" || event.kind === "user"
+  ).length;
+}
+
+function truncatePlainText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(maxLength - 3, 0))}...`;
+}
+
+function normalizeSettings(
+  settings: AgentDashboardSettings
+): AgentDashboardSettings {
+  return {
+    ...settings,
+    agentSessionName:
+      settings.agentSessionName?.trim() || DEFAULT_SETTINGS.agentSessionName,
+    ollamaHost: settings.ollamaHost?.trim() || DEFAULT_SETTINGS.ollamaHost,
+    piExecutablePath:
+      settings.piExecutablePath?.trim() || DEFAULT_SETTINGS.piExecutablePath
+  };
+}
+
+function createAgentSessionName(): string {
+  const stamp = new Date()
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "")
+    .replace(/[^\dT]/g, "")
+    .replace("T", "-");
+
+  return `session-${stamp}`;
+}
+
+function sanitizeSessionFileName(value: string): string {
+  const sanitized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return sanitized || DEFAULT_SETTINGS.agentSessionName;
+}
+
+function getMaxIdCounter(records: { id: string }[], prefix: string): number {
+  return records.reduce((max, record) => {
+    if (!record.id.startsWith(prefix)) {
+      return max;
+    }
+
+    const value = Number(record.id.slice(prefix.length));
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
+}
+
+function limitContextText(value: string): string {
+  if (value.length <= MAX_CONTEXT_CHARS) {
+    return value;
+  }
+
+  return `${value.slice(0, MAX_CONTEXT_CHARS)}\n\n[Context truncated to ${MAX_CONTEXT_CHARS.toLocaleString()} characters.]`;
+}
+
+function normalizeProposedEditPath(value: string): string {
+  const normalized = path.posix
+    .normalize(value.replace(/^["']|["']$/g, "").replace(/^\/+/, "").trim())
+    .replace(/^\.\//, "");
+
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    return "";
+  }
+
+  return normalized;
+}
+
+function extractMentionedVaultFileReferences(
+  prompt: string,
+  files: TFile[]
+): MentionedVaultFileReference[] {
+  const references: MentionedVaultFileReference[] = [];
+  const seenFiles = new Set<string>();
+  const candidates = files
+    .flatMap((file) =>
+      getMentionedPathCandidates(file.path).map((candidate) => ({
+        candidate,
+        file
+      }))
+    )
+    .sort((a, b) => b.candidate.length - a.candidate.length);
+
+  for (const { candidate, file } of candidates) {
+    if (seenFiles.has(file.path)) {
+      continue;
+    }
+
+    const mention = `@${candidate}`;
+    let start = prompt.indexOf(mention);
+
+    while (start !== -1) {
+      const end = start + mention.length;
+      if (
+        isMentionBoundary(prompt, start, end) &&
+        !references.some((reference) => rangesOverlap(reference, { start, end }))
+      ) {
+        references.push({
+          end,
+          file,
+          mention: candidate,
+          start
+        });
+        seenFiles.add(file.path);
+        break;
+      }
+
+      start = prompt.indexOf(mention, start + 1);
+    }
+  }
+
+  for (const match of prompt.matchAll(/@\[\[([^\]]+)\]\]/g)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    const start = match.index;
+    const end = start + match[0].length;
+    if (references.some((reference) => rangesOverlap(reference, { start, end }))) {
+      continue;
+    }
+
+    const file = resolveWikiLinkFile(match[1], files);
+    if (!file || seenFiles.has(file.path)) {
+      continue;
+    }
+
+    references.push({
+      end,
+      file,
+      mention: `[[${match[1]}]]`,
+      start
+    });
+    seenFiles.add(file.path);
+  }
+
+  return references.sort((a, b) => a.start - b.start);
+}
+
+function extractUnresolvedMentionedVaultPaths(
+  prompt: string,
+  resolvedReferences: MentionedVaultFileReference[]
+): string[] {
+  const matches = prompt.matchAll(/(^|\s)@([^\s@]+)/g);
+  const paths: string[] = [];
+  const seenPaths = new Set<string>();
+
+  for (const match of matches) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    const start = match.index + match[1].length;
+    const end = start + match[0].length - match[1].length;
+    if (
+      resolvedReferences.some((reference) =>
+        rangesOverlap(reference, { start, end })
+      )
+    ) {
+      continue;
+    }
+
+    const rawPath = normalizeMentionedPath(match[2]);
+    if (!rawPath || seenPaths.has(rawPath)) {
+      continue;
+    }
+
+    seenPaths.add(rawPath);
+    paths.push(rawPath);
+  }
+
+  return paths;
+}
+
+function normalizeMentionedPath(value: string): string {
+  return value
+    .replace(/[),.;:!?]+$/, "")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function resolveWikiLinkFile(value: string, files: TFile[]): TFile | undefined {
+  const target = value
+    .split("|")[0]
+    .split("#")[0]
+    .replace(/^\/+/, "")
+    .trim();
+  if (!target) {
+    return undefined;
+  }
+
+  const candidates = getMentionedPathCandidates(target);
+  return files.find((file) => {
+    const withoutExtension = file.path.replace(/\.md$/i, "");
+    const basename = path.basename(withoutExtension);
+    return candidates.some(
+      (candidate) =>
+        file.path === candidate ||
+        withoutExtension === candidate ||
+        basename === candidate
+    );
+  });
+}
+
+function getMentionedPathCandidates(mentionedPath: string): string[] {
+  const candidates = [mentionedPath];
+
+  if (!path.extname(mentionedPath)) {
+    candidates.push(`${mentionedPath}.md`);
+  }
+
+  return candidates;
+}
+
+function isMentionBoundary(prompt: string, start: number, end: number): boolean {
+  const before = prompt[start - 1];
+  const after = prompt[end];
+  const validBefore = before === undefined || /\s|[([{]/.test(before);
+  const validAfter = after === undefined || /\s|[),.;:!?}\]]/.test(after);
+
+  return validBefore && validAfter;
+}
+
+function rangesOverlap(
+  left: { end: number; start: number },
+  right: { end: number; start: number }
+): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function scoreVaultFileSuggestion(filePath: string, query: string): number {
+  if (!query) {
+    return 10;
+  }
+
+  const normalizedPath = filePath.toLowerCase();
+  const fileName = path.basename(normalizedPath);
+
+  if (normalizedPath === query) {
+    return 0;
+  }
+
+  if (normalizedPath.startsWith(query)) {
+    return 1;
+  }
+
+  if (fileName.startsWith(query)) {
+    return 2;
+  }
+
+  if (normalizedPath.includes(query)) {
+    return 3;
+  }
+
+  if (isFuzzyMatch(normalizedPath, query)) {
+    return 4;
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
+function isFuzzyMatch(value: string, query: string): boolean {
+  let queryIndex = 0;
+  for (const char of value) {
+    if (char === query[queryIndex]) {
+      queryIndex += 1;
+    }
+
+    if (queryIndex === query.length) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function describeSafetyRequest(request: SafetyRequest): string {

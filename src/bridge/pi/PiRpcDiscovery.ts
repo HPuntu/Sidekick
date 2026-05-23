@@ -3,6 +3,15 @@ import path from "path";
 
 export type PiRpcDiscoveryStatus = "checking" | "error" | "ready" | "unknown";
 
+export interface PiRpcModelSummary {
+  contextWindow?: number;
+  id?: string;
+  label: string;
+  name?: string;
+  provider?: string;
+  reasoning?: boolean;
+}
+
 export interface PiRpcDiscoverySnapshot {
   checkedAt?: string;
   commandCount?: number;
@@ -11,6 +20,7 @@ export interface PiRpcDiscoverySnapshot {
   executablePath: string;
   isStreaming?: boolean;
   modelCount?: number;
+  models: PiRpcModelSummary[];
   noSession: true;
   responseCount?: number;
   sessionId?: string;
@@ -36,6 +46,7 @@ export function createUnknownPiRpcDiscoverySnapshot(
 ): PiRpcDiscoverySnapshot {
   return {
     executablePath,
+    models: [],
     noSession: true,
     status: "unknown"
   };
@@ -46,6 +57,7 @@ export function createCheckingPiRpcDiscoverySnapshot(
 ): PiRpcDiscoverySnapshot {
   return {
     executablePath,
+    models: [],
     noSession: true,
     status: "checking"
   };
@@ -63,6 +75,7 @@ export async function discoverPiRpc(
       checkedAt: new Date().toISOString(),
       error: validationError,
       executablePath: normalizedPath,
+      models: [],
       noSession: true,
       status: "error"
     };
@@ -78,6 +91,7 @@ export async function discoverPiRpc(
         commandCount: DISCOVERY_COMMANDS.length,
         error: `RPC ${failedResponse.command ?? "command"} failed.`,
         executablePath: normalizedPath,
+        models: [],
         noSession: true,
         responseCount: responses.length,
         status: "error"
@@ -91,6 +105,7 @@ export async function discoverPiRpc(
       commandCount: DISCOVERY_COMMANDS.length,
       error: getErrorMessage(error),
       executablePath: normalizedPath,
+      models: [],
       noSession: true,
       status: "error"
     };
@@ -216,6 +231,9 @@ function buildReadySnapshot(
   const stateData = asRecord(state?.data);
   const modelsData = asRecord(models?.data);
   const modelList = Array.isArray(modelsData?.models) ? modelsData.models : [];
+  const modelSummaries = modelList
+    .map((model) => getModelSummary(model))
+    .filter((model): model is PiRpcModelSummary => model !== undefined);
   const currentModel = getModelLabel(stateData?.model);
 
   return {
@@ -226,7 +244,8 @@ function buildReadySnapshot(
     isStreaming: typeof stateData?.isStreaming === "boolean"
       ? stateData.isStreaming
       : undefined,
-    modelCount: modelList.length,
+    modelCount: modelSummaries.length,
+    models: modelSummaries,
     noSession: true,
     responseCount: responses.length,
     sessionId: typeof stateData?.sessionId === "string"
@@ -247,6 +266,10 @@ function getResponseByCommand(
 }
 
 function getModelLabel(model: unknown): string | undefined {
+  return getModelSummary(model)?.label;
+}
+
+function getModelSummary(model: unknown): PiRpcModelSummary | undefined {
   const modelRecord = asRecord(model);
   if (!modelRecord) {
     return undefined;
@@ -259,12 +282,27 @@ function getModelLabel(model: unknown): string | undefined {
   const name = typeof modelRecord.name === "string"
     ? modelRecord.name
     : undefined;
+  const contextWindow = typeof modelRecord.contextWindow === "number"
+    ? modelRecord.contextWindow
+    : undefined;
+  const reasoning = typeof modelRecord.reasoning === "boolean"
+    ? modelRecord.reasoning
+    : undefined;
 
-  if (provider && id) {
-    return `${provider}/${id}`;
+  const label = provider && id ? `${provider}/${id}` : id ?? name;
+
+  if (!label) {
+    return undefined;
   }
 
-  return id ?? name;
+  return {
+    contextWindow,
+    id,
+    label,
+    name,
+    provider,
+    reasoning
+  };
 }
 
 function isRpcResponse(value: unknown): value is RpcResponse {
