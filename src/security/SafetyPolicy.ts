@@ -6,6 +6,7 @@ export type SafetyActionKind =
   | "diagnostic"
   | "prompt"
   | "read"
+  | "safe-command"
   | "shell"
   | "write";
 
@@ -47,20 +48,29 @@ export function assessSafetyRequest(
 
   if (request.kind === "prompt") {
     const command = request.command ?? "";
-    if (!/\s(--no-tools|-nt)(\s|$)/.test(` ${command} `)) {
-      return deny(
-        snapshot,
+    if (usesNoTools(command)) {
+      return {
+        allowed: true,
+        reason: "Prompt run has Pi tools disabled.",
         request,
-        "Read-only mode only allows Pi prompts when tools are disabled."
-      );
+        requiresApproval: false
+      };
     }
 
-    return {
-      allowed: true,
-      reason: "Read-only mode allows prompts when Pi tools are disabled.",
+    if (usesOnlyReadOnlyPiTools(command)) {
+      return {
+        allowed: true,
+        reason: "Prompt run only enables Pi read-only tools.",
+        request,
+        requiresApproval: false
+      };
+    }
+
+    return deny(
+      snapshot,
       request,
-      requiresApproval: false
-    };
+      "Pi prompts only allow tools disabled or the read-only tool allowlist: read, grep, find, ls."
+    );
   }
 
   if (request.kind === "approved-write") {
@@ -75,6 +85,19 @@ export function assessSafetyRequest(
     return {
       allowed: true,
       reason: "Reviewed edit mode allows approved writes inside allowed roots.",
+      request,
+      requiresApproval: false
+    };
+  }
+
+  if (request.kind === "safe-command") {
+    if (!request.command) {
+      return deny(snapshot, request, "Safe commands must include a command.");
+    }
+
+    return {
+      allowed: true,
+      reason: "Command matched the plugin safe command allowlist.",
       request,
       requiresApproval: false
     };
@@ -147,6 +170,32 @@ function deny(
     request,
     requiresApproval: snapshot.mode !== "read-only"
   };
+}
+
+function usesNoTools(command: string): boolean {
+  const paddedCommand = ` ${command} `;
+  return (
+    /\s(--no-tools|-nt)(\s|$)/.test(paddedCommand) &&
+    !/\s(--tools|-t)\s+/.test(paddedCommand)
+  );
+}
+
+function usesOnlyReadOnlyPiTools(command: string): boolean {
+  const matches = [...` ${command} `.matchAll(/\s(?:--tools|-t)\s+([^\s]+)/g)];
+  if (matches.length !== 1) {
+    return false;
+  }
+
+  const allowedTools = new Set(["find", "grep", "ls", "read"]);
+  const requestedTools = matches[0][1]
+    .split(",")
+    .map((tool) => tool.trim())
+    .filter(Boolean);
+
+  return (
+    requestedTools.length > 0 &&
+    requestedTools.every((tool) => allowedTools.has(tool))
+  );
 }
 
 function isPathInsideAnyRoot(targetPath: string, roots: string[]): boolean {

@@ -272,6 +272,12 @@ function renderSafetyStatusItems(
 ): void {
   const snapshot = plugin.getSafetySnapshot();
   renderStatusItem(containerEl, "Safety", snapshot.mode);
+  renderStatusItem(containerEl, "Pi tools", describePiToolMode(plugin.settings.piToolMode));
+  renderStatusItem(
+    containerEl,
+    "Timeout",
+    `${plugin.settings.piPromptTimeoutMinutes} min`
+  );
   renderStatusItem(containerEl, "Roots", summarizeAllowedRoots(snapshot));
   renderStatusItem(containerEl, "Approvals", String(snapshot.pendingApprovals));
   renderStatusItem(
@@ -287,6 +293,14 @@ function renderSafetyStatusItems(
       plugin.lastSafetyDecision.allowed ? "allowed" : "blocked"
     );
   }
+}
+
+function describePiToolMode(toolMode: "disabled" | "read-only"): string {
+  if (toolMode === "read-only") {
+    return "read, grep, find, ls";
+  }
+
+  return "disabled";
 }
 
 function renderAgentPanel(
@@ -470,8 +484,25 @@ function renderAgentPanel(
       void sendPrompt("selection");
     });
 
+  new ButtonComponent(composerActionsEl)
+    .setButtonText("Vault")
+    .setTooltip("Send prompt with vault search and related-note context")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(() => {
+      void sendPrompt("vault");
+    });
+
+  new ButtonComponent(composerActionsEl)
+    .setButtonText("Links")
+    .setTooltip("Suggest conservative internal links for the current note")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(() => {
+      void plugin.suggestInternalLinksForActiveNote();
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
   async function sendPrompt(
-    contextMode: "none" | "note" | "selection"
+    contextMode: "none" | "note" | "selection" | "vault"
   ): Promise<void> {
     const accepted = await plugin.sendAgentPrompt(promptEl.value, contextMode);
     if (!accepted) {
@@ -574,6 +605,13 @@ function renderAgentHistoryPage(
       rows: "3"
     }
   });
+  const suggestionsEl = composerEl.createDiv({
+    cls: "agent-dashboard__mention-suggestions"
+  });
+  suggestionsEl.hide();
+  let mentionSuggestions: string[] = [];
+  let selectedMentionIndex = 0;
+
   const actionsEl = composerEl.createDiv({
     cls: "agent-dashboard__composer-actions"
   });
@@ -596,12 +634,58 @@ function renderAgentHistoryPage(
     .onClick(() => {
       void startSession("selection");
     });
+  new ButtonComponent(actionsEl)
+    .setButtonText("Vault")
+    .setTooltip("Start a new chat with vault search and related-note context")
+    .onClick(() => {
+      void startSession("vault");
+    });
 
   promptEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void startSession("none");
+      closeMentionSuggestions();
+      return;
     }
+
+    if (!suggestionsEl.hasClass("is-visible")) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectedMentionIndex = Math.min(
+        selectedMentionIndex + 1,
+        mentionSuggestions.length - 1
+      );
+      renderMentionSuggestions();
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectedMentionIndex = Math.max(selectedMentionIndex - 1, 0);
+      renderMentionSuggestions();
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      acceptMentionSuggestion(mentionSuggestions[selectedMentionIndex]);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMentionSuggestions();
+    }
+  });
+  promptEl.addEventListener("input", () => {
+    updateMentionSuggestions();
+  });
+  promptEl.addEventListener("click", () => {
+    updateMentionSuggestions();
   });
 
   const historyEl = pageEl.createDiv({
@@ -635,7 +719,7 @@ function renderAgentHistoryPage(
   }
 
   async function startSession(
-    contextMode: "none" | "note" | "selection"
+    contextMode: "none" | "note" | "selection" | "vault"
   ): Promise<void> {
     const prompt = promptEl.value.trim();
     if (!prompt) {
@@ -646,8 +730,79 @@ function renderAgentHistoryPage(
     const accepted = await plugin.sendAgentPrompt(prompt, contextMode);
     if (accepted) {
       promptEl.value = "";
+      closeMentionSuggestions();
     }
     renderDashboardShell(plugin, rootEl, options);
+  }
+
+  function updateMentionSuggestions(): void {
+    const mention = getActiveMention(promptEl);
+    if (!mention) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    mentionSuggestions = plugin.getVaultFileSuggestions(mention.query);
+    selectedMentionIndex = 0;
+
+    if (mentionSuggestions.length === 0) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    renderMentionSuggestions();
+  }
+
+  function renderMentionSuggestions(): void {
+    suggestionsEl.empty();
+    suggestionsEl.show();
+    suggestionsEl.addClass("is-visible");
+
+    for (let index = 0; index < mentionSuggestions.length; index += 1) {
+      const suggestion = mentionSuggestions[index];
+      const itemEl = suggestionsEl.createDiv({
+        cls: "agent-dashboard__mention-suggestion",
+        text: suggestion
+      });
+      itemEl.toggleClass("is-selected", index === selectedMentionIndex);
+      itemEl.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        acceptMentionSuggestion(suggestion);
+      });
+    }
+  }
+
+  function closeMentionSuggestions(): void {
+    mentionSuggestions = [];
+    selectedMentionIndex = 0;
+    suggestionsEl.removeClass("is-visible");
+    suggestionsEl.hide();
+    suggestionsEl.empty();
+  }
+
+  function acceptMentionSuggestion(suggestion: string | undefined): void {
+    if (!suggestion) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    const mention = getActiveMention(promptEl);
+    if (!mention) {
+      closeMentionSuggestions();
+      return;
+    }
+
+    const value = promptEl.value;
+    const suffix = value.slice(mention.end);
+    const trailingSpace = suffix.length > 0 && !/^\s/.test(suffix) ? " " : "";
+    const insertion = mention.query.startsWith("[[")
+      ? `@[[${suggestion.replace(/\.md$/i, "")}]]${trailingSpace}`
+      : `@${suggestion}${trailingSpace}`;
+    promptEl.value = `${value.slice(0, mention.start)}${insertion}${suffix}`;
+    const cursor = mention.start + insertion.length;
+    promptEl.setSelectionRange(cursor, cursor);
+    promptEl.focus();
+    closeMentionSuggestions();
   }
 }
 
@@ -765,7 +920,7 @@ function renderModelSelector(
       cls: "agent-dashboard__model-chip-label",
       text: getShortModelLabel(model.label)
     });
-    const metaText = describeSelectedModel(model);
+    const metaText = describeSelectedModel(plugin, model);
     if (metaText) {
       modelEl.createSpan({
         cls: "agent-dashboard__model-chip-meta",
@@ -852,6 +1007,7 @@ function getModelLogoText(modelLabel: string): string {
 }
 
 function describeSelectedModel(
+  plugin: AgentDashboardPlugin,
   model: PiRpcDiscoverySnapshot["models"][number]
 ): string {
   const parts = [];
@@ -864,7 +1020,28 @@ function describeSelectedModel(
     parts.push("reasoning");
   }
 
+  for (const capability of getOllamaCapabilitiesForPiModel(plugin, model.label)) {
+    if (capability === "tools") {
+      parts.push("tools");
+    } else if (capability === "vision") {
+      parts.push("vision");
+    } else if (capability === "thinking" && !parts.includes("reasoning")) {
+      parts.push("thinking");
+    }
+  }
+
   return parts.join(" · ");
+}
+
+function getOllamaCapabilitiesForPiModel(
+  plugin: AgentDashboardPlugin,
+  modelLabel: string
+): string[] {
+  const modelName = modelLabel.replace(/^ollama\//, "");
+  return (
+    plugin.ollamaSnapshot.models.find((model) => model.name === modelName)
+      ?.capabilities ?? []
+  );
 }
 
 function renderApprovalQueue(

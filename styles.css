@@ -12,6 +12,8 @@
   min-height: 320px;
   overflow: hidden;
   padding: 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard *,
@@ -477,6 +479,8 @@
   min-height: 160px;
   overflow-y: auto;
   padding-right: 2px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__empty {
@@ -535,6 +539,8 @@
   font-size: var(--font-ui-small);
   line-height: 1.4;
   overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__event-text > :first-child {
@@ -619,6 +625,8 @@
   font-size: var(--font-ui-smaller);
   line-height: 1.35;
   overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__tool-payload {
@@ -644,6 +652,8 @@
   overflow: auto;
   padding: 6px;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__status-log-line {
@@ -655,6 +665,8 @@
   grid-template-columns: 14px minmax(0, 1fr) auto;
   line-height: 1.35;
   padding: 0 2px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__status-log-icon {
@@ -758,6 +770,8 @@
   font-size: var(--font-ui-smaller);
   line-height: 1.35;
   overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__diff {
@@ -767,6 +781,8 @@
   font-size: var(--font-ui-smaller);
   max-height: 260px;
   overflow: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-dashboard__diff-line {
@@ -789,12 +805,10 @@
 .agent-dashboard__diff-new-line {
   color: var(--agent-dashboard-muted);
   text-align: right;
-  user-select: none;
 }
 
 .agent-dashboard__diff-marker {
   color: var(--agent-dashboard-muted);
-  user-select: none;
 }
 
 .agent-dashboard__diff-line--added .agent-dashboard__diff-marker {
@@ -807,6 +821,16 @@
 
 .agent-dashboard__diff-text {
   white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.agent-dashboard button,
+.agent-dashboard__model-chip,
+.agent-dashboard__referenced-file,
+.agent-dashboard__mention-suggestion {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .agent-dashboard__proposed-edit-actions {

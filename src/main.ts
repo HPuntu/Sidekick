@@ -6,7 +6,9 @@ import {
   Modal,
   Notice,
   Plugin,
+  TAbstractFile,
   TFile,
+  TFolder,
   WorkspaceLeaf
 } from "obsidian";
 import path from "path";
@@ -68,12 +70,31 @@ import {
   AGENT_DASHBOARD_VIEW_TYPE,
   AgentDashboardView
 } from "./views/AgentDashboardView";
+import {
+  formatInternalLinkSuggestions,
+  proposeInternalLinksForFile
+} from "./tools/InternalLinks";
+import {
+  parseAllowedCommands,
+  runAllowedCommand
+} from "./tools/SafeCommands";
+import {
+  buildVaultIndexSummary,
+  findRelatedVaultNotes,
+  formatVaultSearchHits,
+  searchVault
+} from "./tools/VaultSearch";
+import {
+  fetchUrlText,
+  parseAllowedHosts
+} from "./tools/WebFetch";
 
 const MAX_CONTEXT_CHARS = 20000;
+const MAX_DIRECTORY_CONTEXT_ITEMS = 80;
 const MAX_MENTIONED_FILES = 5;
 const DEFAULT_CHAT_EXPORT_FOLDER = "Chats";
 
-export type AgentPromptContextMode = "none" | "note" | "selection";
+export type AgentPromptContextMode = "none" | "note" | "selection" | "vault";
 export type AgentDashboardAgentView = "chat" | "history";
 
 interface PromptContextBlock {
@@ -86,6 +107,11 @@ interface MentionedVaultFileReference {
   file: TFile;
   mention: string;
   start: number;
+}
+
+interface PromptToolDirective {
+  kind: "cmd" | "index" | "links" | "search" | "semantic" | "url";
+  value: string;
 }
 
 export interface AgentSessionHistoryItem {
@@ -326,6 +352,14 @@ export default class AgentDashboardPlugin extends Plugin {
       name: "Export active agent chat to Markdown",
       callback: () => {
         this.openChatExportModal();
+      }
+    });
+
+    this.addCommand({
+      id: "suggest-internal-links",
+      name: "Suggest internal links for current note",
+      callback: () => {
+        void this.suggestInternalLinksForActiveNote();
       }
     });
 
@@ -654,7 +688,7 @@ export default class AgentDashboardPlugin extends Plugin {
     }
 
     const contextBlocks: PromptContextBlock[] = [];
-    if (contextMode !== "none") {
+    if (contextMode !== "none" && contextMode !== "vault") {
       const context = await this.buildPromptContext(contextMode);
       if (!context) {
         return false;
@@ -663,18 +697,30 @@ export default class AgentDashboardPlugin extends Plugin {
       contextBlocks.push(context);
     }
 
+    if (contextMode === "vault") {
+      const vaultContext = await this.buildVaultSearchPromptContext(trimmedPrompt);
+      contextBlocks.push(...vaultContext);
+    }
+
     const mentionContext = await this.buildMentionedFileContext(trimmedPrompt);
     if (!mentionContext) {
       return false;
     }
 
     contextBlocks.push(...mentionContext);
+    const directiveContext = await this.buildDirectivePromptContext(trimmedPrompt);
+    if (!directiveContext) {
+      return false;
+    }
+
+    contextBlocks.push(...directiveContext);
     for (const context of contextBlocks) {
       this.addAgentEvent("tool", context.eventText);
     }
 
     const promptForPi = [
       ...contextBlocks.map((context) => context.promptPrefix),
+      getVaultGroundingInstructions(),
       getEditProposalInstructions(),
       trimmedPrompt
     ].join("\n\n");
@@ -683,10 +729,19 @@ export default class AgentDashboardPlugin extends Plugin {
     this.agentViewMode = "chat";
     this.agentSessionStatus = "running";
     const sessionPath = this.getPiSessionPath();
+    const toolMode = this.settings.piToolMode;
+    const workspaceRoot = this.getVaultRoot();
+    if (toolMode === "read-only" && !workspaceRoot) {
+      this.agentSessionStatus = "idle";
+      new Notice("Read-only Pi tools require a local filesystem vault.");
+      this.refreshDashboardViews();
+      return false;
+    }
+
     const promptDecision = this.assessSafetyRequest({
       kind: "prompt",
-      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} --no-tools`,
-      description: "Run Pi read-only prompt"
+      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)}`,
+      description: `Run Pi prompt with ${describePiToolMode(toolMode)}`
     });
 
     if (!promptDecision.allowed) {
@@ -701,11 +756,11 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.addAgentEvent(
       "tool",
-      `Safety guard allowed read-only prompt: ${promptDecision.reason}`
+      `Safety guard allowed prompt: ${promptDecision.reason}`
     );
-    this.addAgentEvent("status", "Starting Pi read-only prompt.");
+    this.addAgentEvent("status", `Starting Pi prompt (${describePiToolMode(toolMode)}).`);
     this.refreshDashboardViews();
-    this.startReadOnlyPiPrompt(promptForPi, sessionPath);
+    this.startReadOnlyPiPrompt(promptForPi, sessionPath, toolMode, workspaceRoot);
 
     return true;
   }
@@ -963,6 +1018,32 @@ export default class AgentDashboardPlugin extends Plugin {
       .sort((a, b) => a.score - b.score || a.path.localeCompare(b.path));
 
     return scoredFiles.slice(0, limit).map((item) => item.path);
+  }
+
+  async suggestInternalLinksForActiveNote(): Promise<void> {
+    const file = this.app.workspace.getActiveFile() ?? this.getActiveMarkdownFileInfo()?.file;
+    if (!file) {
+      new Notice("No active note found");
+      return;
+    }
+
+    const proposal = await proposeInternalLinksForFile(this.app, file);
+    const summary = formatInternalLinkSuggestions(file.path, proposal.suggestions);
+    const event = this.addAgentEvent("assistant", summary);
+
+    if (proposal.suggestions.length === 0) {
+      this.refreshDashboardViews();
+      return;
+    }
+
+    this.recordProposedReplacement(
+      event.id,
+      file.path,
+      proposal.originalText,
+      proposal.replacementText,
+      `Apply conservative internal link suggestions to ${file.path}`
+    );
+    this.refreshDashboardViews();
   }
 
   runSafetySelfCheck(): void {
@@ -1348,6 +1429,45 @@ export default class AgentDashboardPlugin extends Plugin {
     this.refreshDashboardViews();
   }
 
+  private recordProposedReplacement(
+    eventId: string,
+    vaultPath: string,
+    originalText: string,
+    replacementText: string,
+    description: string
+  ): void {
+    if (originalText === replacementText) {
+      return;
+    }
+
+    const targetPath = this.getVaultPathAbsolutePath(vaultPath);
+    const decision = this.assessSafetyRequest({
+      description,
+      kind: "write",
+      targetPath
+    });
+    const approval = this.enqueueApproval(decision);
+    const file = this.app.vault.getFileByPath(vaultPath);
+
+    this.proposedEditCounter += 1;
+    this.proposedEdits.unshift({
+      approvalId: approval.id,
+      createdAt: new Date().toISOString(),
+      diffLines: createLineDiff(originalText, replacementText),
+      eventId,
+      fileExists: file !== null,
+      id: `proposed-edit-${this.proposedEditCounter}`,
+      originalText,
+      path: vaultPath,
+      replacementText,
+      status: "pending-approval"
+    });
+
+    if (this.proposedEdits.length > 40) {
+      this.proposedEdits = this.proposedEdits.slice(0, 40);
+    }
+  }
+
   private async recordProposedEdits(
     eventId: string | undefined,
     text: string
@@ -1533,6 +1653,216 @@ export default class AgentDashboardPlugin extends Plugin {
         eventText: `Added @ context from ${file.path} (${text.length.toLocaleString()} chars).`,
         promptPrefix: formatPromptContext("Mentioned file", file.path, text)
       });
+
+      const directoryContext = this.buildMentionedFileDirectoryContext(file);
+      if (directoryContext) {
+        blocks.push(directoryContext);
+      }
+    }
+
+    return blocks;
+  }
+
+  private buildMentionedFileDirectoryContext(
+    file: TFile
+  ): PromptContextBlock | undefined {
+    const folderPath = getVaultFolderPath(file.path);
+    const targetPath = this.getVaultPathAbsolutePath(folderPath);
+    const readDecision = this.assessSafetyRequest({
+      description: `List vault directory for @ file: ${formatVaultFolderLabel(folderPath)}`,
+      kind: "read",
+      targetPath
+    });
+
+    if (!readDecision.allowed) {
+      this.addAgentEvent(
+        "tool",
+        `Safety guard blocked directory context for ${file.path}: ${readDecision.reason}`
+      );
+      this.refreshDashboardViews();
+      return undefined;
+    }
+
+    const directoryContext = formatVaultDirectoryContext(
+      file,
+      this.app.vault.getAllLoadedFiles()
+    );
+
+    return {
+      eventText: `Added directory context for ${formatVaultFolderLabel(folderPath)}.`,
+      promptPrefix: formatPromptContext(
+        "Vault directory listing",
+        formatVaultFolderLabel(folderPath),
+        directoryContext
+      )
+    };
+  }
+
+  private async buildVaultSearchPromptContext(
+    query: string
+  ): Promise<PromptContextBlock[]> {
+    const [exactHits, relatedHits, indexSummary] = await Promise.all([
+      searchVault(this.app, query, 8),
+      findRelatedVaultNotes(this.app, query, 8),
+      buildVaultIndexSummary(this.app, 80)
+    ]);
+
+    return [
+      {
+        eventText: `Added vault search context for "${truncatePlainText(query, 48)}".`,
+        promptPrefix: formatPromptContext(
+          "Vault search",
+          "vault",
+          [
+            formatVaultSearchHits("Exact/metadata vault search", query, exactHits),
+            "",
+            formatVaultSearchHits("Related-note search", query, relatedHits),
+            "",
+            indexSummary
+          ].join("\n")
+        )
+      }
+    ];
+  }
+
+  private async buildDirectivePromptContext(
+    prompt: string
+  ): Promise<PromptContextBlock[] | undefined> {
+    const directives = extractPromptToolDirectives(prompt);
+    if (directives.length === 0) {
+      return [];
+    }
+
+    const blocks: PromptContextBlock[] = [];
+    for (const directive of directives) {
+      if (directive.kind === "search") {
+        const hits = await searchVault(this.app, directive.value, 10);
+        blocks.push({
+          eventText: `Ran vault search for "${directive.value}".`,
+          promptPrefix: formatPromptContext(
+            "Vault search",
+            `@search(${directive.value})`,
+            formatVaultSearchHits("Exact/metadata vault search", directive.value, hits)
+          )
+        });
+        continue;
+      }
+
+      if (directive.kind === "semantic") {
+        const hits = await findRelatedVaultNotes(this.app, directive.value, 10);
+        blocks.push({
+          eventText: `Ran related-note search for "${directive.value}".`,
+          promptPrefix: formatPromptContext(
+            "Related-note search",
+            `@semantic(${directive.value})`,
+            formatVaultSearchHits("Related-note search", directive.value, hits)
+          )
+        });
+        continue;
+      }
+
+      if (directive.kind === "index") {
+        blocks.push({
+          eventText: "Added vault filename/header index.",
+          promptPrefix: formatPromptContext(
+            "Vault filename and heading index",
+            "vault",
+            await buildVaultIndexSummary(this.app)
+          )
+        });
+        continue;
+      }
+
+      if (directive.kind === "url") {
+        if (!this.settings.webFetchEnabled) {
+          this.addAgentEvent("tool", "Blocked URL fetch: web fetch is disabled.");
+          continue;
+        }
+
+        const result = await fetchUrlText(
+          directive.value,
+          parseAllowedHosts(this.settings.webFetchAllowedHosts)
+        );
+        blocks.push({
+          eventText: result.error
+            ? `URL fetch failed for ${directive.value}: ${result.error}`
+            : `Fetched URL context from ${result.url}.`,
+          promptPrefix: formatPromptContext(
+            "Fetched URL",
+            result.url,
+            result.error
+              ? `Fetch failed: ${result.error}`
+              : [`Title: ${result.title ?? "unknown"}`, "", result.content].join("\n")
+          )
+        });
+        continue;
+      }
+
+      if (directive.kind === "cmd") {
+        const allowedCommands = parseAllowedCommands(this.settings.safeCommandAllowlist);
+        const commandAllowed = allowedCommands.includes(
+          directive.value.trim().replace(/\s+/g, " ")
+        );
+        const decision = this.assessSafetyRequest({
+          command: directive.value,
+          description: `Run safe command: ${directive.value}`,
+          kind: commandAllowed ? "safe-command" : "shell"
+        });
+        if (!decision.allowed) {
+          blocks.push({
+            eventText: `Blocked command context: ${decision.reason}`,
+            promptPrefix: formatPromptContext(
+              "Safe command output",
+              directive.value,
+              `Command blocked: ${decision.reason}`
+            )
+          });
+          continue;
+        }
+
+        const result = await runAllowedCommand(
+          directive.value,
+          allowedCommands,
+          this.getVaultRoot()
+        );
+        blocks.push({
+          eventText: result.success
+            ? `Ran safe command: ${result.command}`
+            : `Safe command blocked or failed: ${result.command}`,
+          promptPrefix: formatPromptContext(
+            "Safe command output",
+            result.command,
+            [
+              `Command: ${result.command}`,
+              `Success: ${result.success}`,
+              result.exitCode === undefined ? "" : `Exit code: ${result.exitCode}`,
+              "",
+              result.output
+            ].filter(Boolean).join("\n")
+          )
+        });
+        continue;
+      }
+
+      if (directive.kind === "links") {
+        const file = directive.value
+          ? this.app.vault.getFileByPath(normalizeMentionedPath(directive.value))
+          : this.app.workspace.getActiveFile() ?? this.getActiveMarkdownFileInfo()?.file;
+        if (!file) {
+          this.addAgentEvent("tool", "Internal link suggestions skipped: note not found.");
+          continue;
+        }
+
+        const proposal = await proposeInternalLinksForFile(this.app, file);
+        blocks.push({
+          eventText: `Added internal link suggestions for ${file.path}.`,
+          promptPrefix: formatPromptContext(
+            "Internal link suggestions",
+            file.path,
+            formatInternalLinkSuggestions(file.path, proposal.suggestions)
+          )
+        });
+      }
     }
 
     return blocks;
@@ -1584,7 +1914,12 @@ export default class AgentDashboardPlugin extends Plugin {
     }
   }
 
-  private startReadOnlyPiPrompt(prompt: string, sessionPath: string | undefined): void {
+  private startReadOnlyPiPrompt(
+    prompt: string,
+    sessionPath: string | undefined,
+    toolMode: "disabled" | "read-only",
+    workspaceRoot: string | undefined
+  ): void {
     let assistantText = "";
     let assistantEventId: string | undefined;
     const selectedModel = this.settings.selectedPiModel;
@@ -1594,7 +1929,10 @@ export default class AgentDashboardPlugin extends Plugin {
         executablePath: this.settings.piExecutablePath,
         modelLabel: selectedModel,
         prompt,
-        sessionPath
+        sessionPath,
+        timeoutMs: this.settings.piPromptTimeoutMinutes * 60_000,
+        toolMode,
+        workspaceRoot
       },
       {
         onAssistantDelta: (delta) => {
@@ -1617,6 +1955,10 @@ export default class AgentDashboardPlugin extends Plugin {
           this.refreshDashboardViews();
         },
         onStatus: (message) => {
+          if (isPiToolSupportErrorStatus(message)) {
+            new Notice("Selected model does not support Pi tools. Disable Pi tools or choose another model.");
+          }
+
           if (message.includes("complete") || message.includes("stopped")) {
             if (message.includes("complete")) {
               void this.recordProposedEdits(assistantEventId, assistantText);
@@ -1659,6 +2001,135 @@ function formatPromptContext(label: string, filePath: string, text: string): str
   ].join("\n");
 }
 
+function formatPiToolFlag(toolMode: "disabled" | "read-only"): string {
+  if (toolMode === "read-only") {
+    return "--tools read,grep,find,ls";
+  }
+
+  return "--no-tools";
+}
+
+function describePiToolMode(toolMode: "disabled" | "read-only"): string {
+  if (toolMode === "read-only") {
+    return "read-only tools: read, grep, find, ls";
+  }
+
+  return "tools disabled";
+}
+
+function isPiToolSupportErrorStatus(message: string): boolean {
+  return /does not support Pi\/Ollama tool calls/i.test(message);
+}
+
+function getVaultGroundingInstructions(): string {
+  return [
+    "<vault-grounding-instructions>",
+    "Use only the Obsidian context blocks supplied in this prompt as authoritative vault/project evidence.",
+    "Tool-style context blocks such as Vault search, Related-note search, Safe command output, Fetched URL, and Internal link suggestions are generated by the plugin before the model runs.",
+    "Do not invent vault files, sibling files, folder contents, citations, or code paths that are not present in the supplied file contents or directory listings.",
+    "When asked what files exist in a folder, answer from the supplied Vault directory listing. If the listing does not include a file, say it is not present in the provided listing.",
+    "</vault-grounding-instructions>"
+  ].join("\n");
+}
+
+function extractPromptToolDirectives(prompt: string): PromptToolDirective[] {
+  const directives: PromptToolDirective[] = [];
+  for (const match of prompt.matchAll(/@(search|semantic|url|cmd|links)\(([^)]{1,600})\)/gi)) {
+    const kind = match[1].toLowerCase() as PromptToolDirective["kind"];
+    directives.push({
+      kind,
+      value: match[2].trim()
+    });
+  }
+
+  if (/(^|\s)@vault-index(\s|$)/i.test(prompt)) {
+    directives.push({ kind: "index", value: "" });
+  }
+
+  if (/(^|\s)@links(\s|$)/i.test(prompt)) {
+    directives.push({ kind: "links", value: "" });
+  }
+
+  return directives;
+}
+
+function isKnownPromptToolDirective(value: string): boolean {
+  return /^(search|semantic|url|cmd|links)\(/i.test(value) || /^(vault-index|links)$/i.test(value);
+}
+
+function formatVaultDirectoryContext(
+  referencedFile: TFile,
+  loadedFiles: TAbstractFile[]
+): string {
+  const folderPath = getVaultFolderPath(referencedFile.path);
+  const directChildren = loadedFiles
+    .filter((item) => item.path !== folderPath)
+    .filter((item) => getVaultFolderPath(item.path) === folderPath)
+    .sort(compareVaultFiles);
+  const folders = directChildren.filter(
+    (item): item is TFolder => item instanceof TFolder
+  );
+  const files = directChildren.filter(
+    (item): item is TFile => item instanceof TFile
+  );
+  const markdownFiles = files.filter((item) => item.extension === "md");
+  const otherFiles = files.filter((item) => item.extension !== "md");
+  const hiddenCount =
+    getOmittedDirectoryItemCount(folders) +
+    getOmittedDirectoryItemCount(markdownFiles) +
+    getOmittedDirectoryItemCount(otherFiles);
+
+  return [
+    `Referenced file: ${referencedFile.path}`,
+    `Parent folder: ${formatVaultFolderLabel(folderPath)}`,
+    "",
+    "Exact direct children currently visible in the vault:",
+    formatDirectorySection("Folders", folders.map((item) => item.path)),
+    formatDirectorySection("Markdown files", markdownFiles.map((item) => item.path)),
+    formatDirectorySection("Other files", otherFiles.map((item) => item.path)),
+    hiddenCount > 0
+      ? `Additional entries omitted from this listing: ${hiddenCount}`
+      : "Additional entries omitted from this listing: 0",
+    "",
+    "This is a directory listing, not a list of inferred or likely files."
+  ].join("\n");
+}
+
+function formatDirectorySection(label: string, paths: string[]): string {
+  const visiblePaths = paths.slice(0, MAX_DIRECTORY_CONTEXT_ITEMS);
+  if (visiblePaths.length === 0) {
+    return `${label}:\n- (none)`;
+  }
+
+  return [
+    `${label}:`,
+    ...visiblePaths.map((item) => `- ${item}`)
+  ].join("\n");
+}
+
+function getOmittedDirectoryItemCount(items: TAbstractFile[]): number {
+  return Math.max(0, items.length - MAX_DIRECTORY_CONTEXT_ITEMS);
+}
+
+function compareVaultFiles(left: TAbstractFile, right: TAbstractFile): number {
+  const leftFolder = left instanceof TFolder;
+  const rightFolder = right instanceof TFolder;
+  if (leftFolder !== rightFolder) {
+    return leftFolder ? -1 : 1;
+  }
+
+  return left.path.localeCompare(right.path);
+}
+
+function getVaultFolderPath(vaultPath: string): string {
+  const folderPath = path.posix.dirname(vaultPath);
+  return folderPath === "." ? "" : folderPath;
+}
+
+function formatVaultFolderLabel(folderPath: string): string {
+  return folderPath || "/";
+}
+
 function getEditProposalInstructions(): string {
   return [
     "<agent-dashboard-edit-format>",
@@ -1668,6 +2139,7 @@ function getEditProposalInstructions(): string {
     "---",
     "replacement file contents",
     "```",
+    "Use this format for reviewed note creation, note updates, frontmatter updates, move/rename notes expressed as replacement files, and conservative internal-linking suggestions.",
     "Do not claim that edits have been applied. The dashboard will show a diff and require approval.",
     "</agent-dashboard-edit-format>"
   ].join("\n");
@@ -2018,8 +2490,26 @@ function normalizeSettings(
       settings.agentSessionName?.trim() || DEFAULT_SETTINGS.agentSessionName,
     ollamaHost: settings.ollamaHost?.trim() || DEFAULT_SETTINGS.ollamaHost,
     piExecutablePath:
-      settings.piExecutablePath?.trim() || DEFAULT_SETTINGS.piExecutablePath
+      settings.piExecutablePath?.trim() || DEFAULT_SETTINGS.piExecutablePath,
+    piPromptTimeoutMinutes: normalizePiPromptTimeout(
+      settings.piPromptTimeoutMinutes
+    ),
+    piToolMode: settings.piToolMode === "read-only" ? "read-only" : "disabled",
+    safeCommandAllowlist:
+      settings.safeCommandAllowlist ?? DEFAULT_SETTINGS.safeCommandAllowlist,
+    webFetchAllowedHosts:
+      settings.webFetchAllowedHosts ?? DEFAULT_SETTINGS.webFetchAllowedHosts,
+    webFetchEnabled: settings.webFetchEnabled === true
   };
+}
+
+function normalizePiPromptTimeout(value: unknown): number {
+  const timeout = typeof value === "number" ? value : DEFAULT_SETTINGS.piPromptTimeoutMinutes;
+  if (!Number.isFinite(timeout)) {
+    return DEFAULT_SETTINGS.piPromptTimeoutMinutes;
+  }
+
+  return Math.min(30, Math.max(2, Math.round(timeout)));
 }
 
 function createAgentSessionName(): string {
@@ -2181,7 +2671,7 @@ function extractUnresolvedMentionedVaultPaths(
     }
 
     const rawPath = normalizeMentionedPath(match[2]);
-    if (!rawPath || seenPaths.has(rawPath)) {
+    if (!rawPath || isKnownPromptToolDirective(rawPath) || seenPaths.has(rawPath)) {
       continue;
     }
 

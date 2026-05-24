@@ -8,6 +8,8 @@ export interface PiReadOnlyPromptOptions {
   prompt: string;
   sessionPath?: string;
   timeoutMs?: number;
+  toolMode?: "disabled" | "read-only";
+  workspaceRoot?: string;
 }
 
 export interface PiReadOnlyPromptCallbacks {
@@ -58,6 +60,7 @@ export class PiReadOnlyPromptRun {
   private emittedAssistantText = false;
   private options: Required<PiReadOnlyPromptOptions>;
   private pendingCompletionMessage?: string;
+  private reportedRunError?: string;
   private reportedThinking = false;
   private stderr = "";
   private stdoutBuffer = "";
@@ -72,7 +75,9 @@ export class PiReadOnlyPromptRun {
       modelLabel: options.modelLabel ?? "",
       prompt: options.prompt,
       sessionPath: options.sessionPath ?? "",
-      timeoutMs: options.timeoutMs ?? 120000
+      timeoutMs: options.timeoutMs ?? 600000,
+      toolMode: options.toolMode ?? "disabled",
+      workspaceRoot: options.workspaceRoot ?? ""
     };
     this.callbacks = callbacks;
   }
@@ -92,12 +97,13 @@ export class PiReadOnlyPromptRun {
 
     const args = buildReadOnlyArgs(this.options);
     this.child = spawn(this.options.executablePath, args, {
+      cwd: this.options.workspaceRoot || undefined,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });
 
     this.timeout = window.setTimeout(() => {
-      this.fail("Pi read-only prompt timed out.");
+      this.fail(`Pi prompt timed out after ${formatTimeout(this.options.timeoutMs)}.`);
     }, this.options.timeoutMs);
 
     this.child.stdout.setEncoding("utf8");
@@ -215,7 +221,7 @@ export class PiReadOnlyPromptRun {
 
       const error = getMessageError(record.messages);
       if (error) {
-        this.callbacks.onStatus(`Pi ended with no assistant text: ${error}`);
+        this.reportRunError(error);
       } else if (!this.emittedAssistantText) {
         this.callbacks.onStatus("Pi completed without assistant text.");
       }
@@ -232,7 +238,7 @@ export class PiReadOnlyPromptRun {
     if (record.type === "turn_end") {
       const error = getMessageError(record.message);
       if (error) {
-        this.callbacks.onStatus(`Pi turn ended with an error: ${error}`);
+        this.reportRunError(error);
       }
       this.emitFinalAssistantText(record.message);
       return;
@@ -246,7 +252,7 @@ export class PiReadOnlyPromptRun {
     if (record.type === "message_end") {
       const error = getMessageError(record.message);
       if (error) {
-        this.callbacks.onStatus(`Pi message ended with an error: ${error}`);
+        this.reportRunError(error);
       }
       this.emitFinalAssistantText(record.message);
       return;
@@ -317,6 +323,16 @@ export class PiReadOnlyPromptRun {
 
     this.reportedThinking = true;
     this.callbacks.onStatus("Pi is reasoning.");
+  }
+
+  private reportRunError(error: string): void {
+    const message = normalizePiRunError(error, this.options);
+    if (!message || this.reportedRunError === message) {
+      return;
+    }
+
+    this.reportedRunError = message;
+    this.callbacks.onStatus(message);
   }
 
   private writeJson(payload: Record<string, unknown>): void {
@@ -409,7 +425,9 @@ export function setPiRpcModel(
       modelLabel: "",
       prompt: "",
       sessionPath: sessionPath ?? "",
-      timeoutMs
+      timeoutMs,
+      toolMode: "disabled",
+      workspaceRoot: ""
     });
     const child = spawn(normalizedPath, args, {
       shell: false,
@@ -542,19 +560,41 @@ function buildReadOnlyArgs(options: Required<PiReadOnlyPromptOptions>): string[]
     args.push("--no-session");
   }
 
-  args.push(
-    "--no-tools",
-    "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-context-files"
-  );
+  if (options.toolMode === "read-only") {
+    args.push("--tools", "read,grep,find,ls");
+  } else {
+    args.push("--no-tools");
+  }
+
+  args.push("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files");
 
   if (options.modelLabel) {
     args.push("--model", options.modelLabel);
   }
 
   return args;
+}
+
+function normalizePiRunError(
+  error: string,
+  options: Required<PiReadOnlyPromptOptions>
+): string {
+  if (options.toolMode === "read-only" && /does not support tools/i.test(error)) {
+    const model = options.modelLabel || "The selected model";
+    return `${model} does not support Pi/Ollama tool calls. Choose a tool-capable model or set Pi tools to Disabled.`;
+  }
+
+  return `Pi run error: ${error}`;
+}
+
+function formatTimeout(timeoutMs: number): string {
+  const minutes = Math.round(timeoutMs / 60000);
+  if (minutes >= 1) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  const seconds = Math.round(timeoutMs / 1000);
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
 function parseModelLabel(

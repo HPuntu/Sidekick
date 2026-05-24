@@ -4,6 +4,7 @@ import { request as requestHttps } from "https";
 export type OllamaStatus = "unknown" | "checking" | "running" | "unreachable";
 
 export interface OllamaModel {
+  capabilities?: string[];
   name: string;
   modifiedAt?: string;
   size?: number;
@@ -30,6 +31,10 @@ interface OllamaTagsResponse {
 
 interface OllamaVersionResponse {
   version?: string;
+}
+
+interface OllamaShowResponse {
+  capabilities?: string[];
 }
 
 export function createUnknownOllamaSnapshot(host: string): OllamaSnapshot {
@@ -74,7 +79,7 @@ export async function checkOllama(
       requestJson<OllamaTagsResponse>(normalizedHost, "/api/tags", timeoutMs)
     ]);
 
-    const models = (tagsResponse.models ?? [])
+    const modelsWithoutCapabilities = (tagsResponse.models ?? [])
       .filter((model) => typeof model.name === "string" && model.name.length > 0)
       .map((model) => ({
         name: model.name ?? "",
@@ -82,6 +87,11 @@ export async function checkOllama(
         size: model.size
       }))
       .sort((first, second) => first.name.localeCompare(second.name));
+    const models = await hydrateModelCapabilities(
+      normalizedHost,
+      modelsWithoutCapabilities,
+      Math.max(800, timeoutMs)
+    );
 
     const selected = selectedModel.trim();
 
@@ -108,6 +118,42 @@ export async function checkOllama(
   }
 }
 
+async function hydrateModelCapabilities(
+  host: string,
+  models: OllamaModel[],
+  timeoutMs: number
+): Promise<OllamaModel[]> {
+  const limitedModels = models.slice(0, 16);
+  const capabilityResults = await Promise.all(
+    limitedModels.map(async (model) => {
+      try {
+        const response = await requestJson<OllamaShowResponse>(
+          host,
+          "/api/show",
+          timeoutMs,
+          "POST",
+          { model: model.name }
+        );
+        return {
+          ...model,
+          capabilities: Array.isArray(response.capabilities)
+            ? response.capabilities.filter(
+                (capability): capability is string => typeof capability === "string"
+              )
+            : undefined
+        };
+      } catch {
+        return model;
+      }
+    })
+  );
+
+  return [
+    ...capabilityResults,
+    ...models.slice(limitedModels.length)
+  ];
+}
+
 function normalizeHost(host: string): string {
   const trimmed = host.trim() || "http://127.0.0.1:11434";
   const withProtocol = /^https?:\/\//.test(trimmed)
@@ -124,7 +170,9 @@ function normalizeHost(host: string): string {
 function requestJson<T>(
   host: string,
   pathname: string,
-  timeoutMs: number
+  timeoutMs: number,
+  method = "GET",
+  body?: unknown
 ): Promise<T> {
   const url = new URL(pathname, host);
   const requester = url.protocol === "https:" ? requestHttps : requestHttp;
@@ -134,9 +182,10 @@ function requestJson<T>(
       url,
       {
         headers: {
-          accept: "application/json"
+          accept: "application/json",
+          ...(body === undefined ? {} : { "content-type": "application/json" })
         },
-        method: "GET"
+        method
       },
       (response) => {
         let body = "";
@@ -165,6 +214,9 @@ function requestJson<T>(
       request.destroy(new Error("Ollama request timed out"));
     });
     request.on("error", reject);
+    if (body !== undefined) {
+      request.write(JSON.stringify(body));
+    }
     request.end();
   });
 }

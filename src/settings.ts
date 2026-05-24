@@ -6,24 +6,39 @@ export interface AgentDashboardSettings {
   agentSessionName: string;
   allowedExternalWorkspaceRoots: string;
   autoStartBridge: boolean;
+  piToolMode: "disabled" | "read-only";
+  piPromptTimeoutMinutes: number;
   piExecutablePath: string;
   selectedPiModel: string;
   ollamaHost: string;
   defaultModel: string;
   compactBlockHeight: number;
   permissionMode: "ask" | "trusted";
+  safeCommandAllowlist: string;
+  webFetchAllowedHosts: string;
+  webFetchEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   agentSessionName: "default",
   allowedExternalWorkspaceRoots: "",
   autoStartBridge: true,
+  piToolMode: "disabled",
+  piPromptTimeoutMinutes: 10,
   piExecutablePath: "pi",
   selectedPiModel: "",
   ollamaHost: "http://127.0.0.1:11434",
   defaultModel: "",
   compactBlockHeight: 360,
-  permissionMode: "ask"
+  permissionMode: "ask",
+  safeCommandAllowlist: [
+    "git status",
+    "git diff",
+    "npm run typecheck",
+    "npm run build"
+  ].join("\n"),
+  webFetchAllowedHosts: "",
+  webFetchEnabled: false
 };
 
 export class AgentDashboardSettingTab extends PluginSettingTab {
@@ -107,6 +122,40 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Pi tools")
+      .setDesc(
+        "Disabled keeps Pi fully tool-free. Read-only enables Pi's read, grep, find, and ls tools from the vault root; bash, edit, and write stay disabled."
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("disabled", "Disabled")
+          .addOption("read-only", "Read-only: read, grep, find, ls")
+          .setValue(this.plugin.settings.piToolMode)
+          .onChange(async (value) => {
+            this.plugin.settings.piToolMode = value as "disabled" | "read-only";
+            await this.plugin.saveSettings();
+            this.plugin.refreshDashboardViews();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Pi prompt timeout")
+      .setDesc(
+        "Maximum time to wait for a Pi response. Larger local models and read-only tools may need several minutes."
+      )
+      .addSlider((slider) =>
+        slider
+          .setLimits(2, 30, 1)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.piPromptTimeoutMinutes)
+          .onChange(async (value) => {
+            this.plugin.settings.piPromptTimeoutMinutes = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshDashboardViews();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Ollama host")
       .setDesc("Local Ollama server URL.")
       .addText((text) =>
@@ -145,6 +194,51 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.compactBlockHeight)
           .onChange(async (value) => {
             this.plugin.settings.compactBlockHeight = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Safe command allowlist")
+      .setDesc(
+        "Exact commands the plugin may run with @cmd(...). Commands run without a shell from the vault root."
+      )
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("git status\nnpm run typecheck")
+          .setValue(this.plugin.settings.safeCommandAllowlist)
+          .onChange(async (value) => {
+            this.plugin.settings.safeCommandAllowlist = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Web fetch")
+      .setDesc(
+        "Allow @url(...) prompt context. Local/private hosts are blocked; optional hosts below can narrow access further."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.webFetchEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.webFetchEnabled = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshDashboardViews();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Web fetch allowed hosts")
+      .setDesc(
+        "Optional host allowlist, one per line. Leave empty to allow public HTTP/HTTPS hosts when web fetch is enabled."
+      )
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("arxiv.org\ngithub.com")
+          .setValue(this.plugin.settings.webFetchAllowedHosts)
+          .onChange(async (value) => {
+            this.plugin.settings.webFetchAllowedHosts = value;
             await this.plugin.saveSettings();
           })
       );

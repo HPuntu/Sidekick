@@ -67,8 +67,16 @@ Completed so far:
 - Manual RPC status check with diagnostic safety audit entries.
 - Pi RPC model summaries from discovery responses.
 - Persistent right-sidebar Pi model selector.
-- Read-only Pi prompt runner using RPC mode with session persistence, tools, extensions, skills, prompt templates, and context files disabled.
-- Safety policy only allows prompt runs when the recorded Pi command includes `--no-tools` or `-nt`.
+- Read-only Pi prompt runner using RPC mode with session persistence, extensions, skills, prompt templates, and context files disabled.
+- Optional Pi read-only tool mode enables only `read`, `grep`, `find`, and `ls` from the vault root.
+- Safety policy only allows prompt runs when Pi tools are disabled or the recorded Pi command uses the read-only tool allowlist.
+- Pi prompt timeout is configurable, defaulting to 10 minutes for larger local models and tool-backed runs.
+- Local tool directives can inject plugin-generated context: `@search(...)`, `@semantic(...)`, `@vault-index`, `@cmd(...)`, `@url(...)`, and `@links`.
+- Vault search covers filenames, headings, tags/frontmatter tags, and line snippets.
+- Local related-note search provides lightweight semantic-style matching without external dependencies.
+- Ollama status now hydrates model capabilities such as `tools`, `vision`, and `thinking` for model chips.
+- Safe command context runs only exact allowlisted commands without a shell from the vault root.
+- URL fetch context is opt-in, blocks local/private hosts, and can be narrowed with a host allowlist.
 - Streaming assistant text from Pi `message_update` / `text_delta` events into the Agent panel.
 - Stop control that sends a Pi RPC abort request before cleaning up the local process.
 - Selected Pi model passed to the prompt runner with `--model`.
@@ -80,6 +88,8 @@ Completed so far:
 - Agent prompt `@` autocomplete for vault Markdown files, with fuzzy matching and keyboard/mouse selection.
 - `@` file resolution matches against actual vault file paths before token parsing, so paths with spaces are handled correctly.
 - `@[[Wiki Link]]` note references resolve to vault Markdown files for read-only context, and `@[[` can use autocomplete insertion.
+- `@` file context now includes an exact parent directory listing so models can answer sibling-file questions without inventing vault files.
+- Prompts include grounding instructions telling local models not to invent vault files, folders, citations, or paths absent from supplied context.
 - Agent event bodies rendered through Obsidian's Markdown renderer, including normal Markdown and Obsidian-supported math rendering.
 - Vault file paths mentioned in agent events surfaced as clickable file chips that open the note in Obsidian.
 - Vault file paths inside rendered Markdown paragraphs are linked inline while code/math blocks are left untouched.
@@ -99,6 +109,7 @@ Completed so far:
 - Each proposed edit queues a write approval.
 - Approved proposed edits can be applied to vault Markdown files through Obsidian vault APIs.
 - Apply re-reads the target file and blocks stale proposals if the file changed after the diff was generated.
+- Conservative internal-link suggestions can be generated for the current note from vault filenames and top-level headings, then reviewed/applied as normal diffs.
 - Shell commands, deletes, external writes, and unapproved writes remain blocked.
 
 Not implemented yet:
