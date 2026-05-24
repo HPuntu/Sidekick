@@ -239,7 +239,7 @@ export class PiReadOnlyPromptRun {
     }
 
     if (record.type === "message_start") {
-      this.callbacks.onStatus("Pi assistant message started.");
+      this.callbacks.onStatus("Model response started.");
       return;
     }
 
