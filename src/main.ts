@@ -88,11 +88,25 @@ import {
   fetchUrlText,
   parseAllowedHosts
 } from "./tools/WebFetch";
+import { extractPdfText } from "./tools/PdfText";
 
 const MAX_CONTEXT_CHARS = 20000;
 const MAX_DIRECTORY_CONTEXT_ITEMS = 80;
 const MAX_MENTIONED_FILES = 5;
+const MAX_PDF_CONTEXT_BYTES = 50 * 1024 * 1024;
 const DEFAULT_CHAT_EXPORT_FOLDER = "Chats";
+const TEXT_CONTEXT_EXTENSIONS = new Set([
+  "bib",
+  "csv",
+  "json",
+  "latex",
+  "md",
+  "mmd",
+  "tex",
+  "txt",
+  "yaml",
+  "yml"
+]);
 
 export type AgentPromptContextMode = "none" | "note" | "selection" | "vault";
 export type AgentDashboardAgentView = "chat" | "history";
@@ -1009,7 +1023,7 @@ export default class AgentDashboardPlugin extends Plugin {
     const normalizedQuery = normalizeMentionedPath(query)
       .replace(/^\[\[/, "")
       .toLowerCase();
-    const scoredFiles = this.app.vault.getMarkdownFiles()
+    const scoredFiles = this.app.vault.getFiles()
       .map((file) => ({
         path: file.path,
         score: scoreVaultFileSuggestion(file.path, normalizedQuery)
@@ -1599,7 +1613,7 @@ export default class AgentDashboardPlugin extends Plugin {
   ): Promise<PromptContextBlock[] | undefined> {
     const mentionedFiles = extractMentionedVaultFileReferences(
       prompt,
-      this.app.vault.getMarkdownFiles()
+      this.app.vault.getFiles()
     );
     const unresolvedMentions = extractUnresolvedMentionedVaultPaths(
       prompt,
@@ -1647,12 +1661,26 @@ export default class AgentDashboardPlugin extends Plugin {
         return undefined;
       }
 
-      const contents = await this.app.vault.read(file);
-      const text = limitContextText(contents);
-      blocks.push({
-        eventText: `Added @ context from ${file.path} (${text.length.toLocaleString()} chars).`,
-        promptPrefix: formatPromptContext("Mentioned file", file.path, text)
-      });
+      if (file.extension.toLowerCase() === "pdf") {
+        blocks.push(await this.buildMentionedPdfContext(file));
+      } else if (canReadMentionedFileAsText(file)) {
+        const contents = await this.app.vault.read(file);
+        const text = limitContextText(contents);
+        blocks.push({
+          eventText: `Added @ context from ${file.path} (${text.length.toLocaleString()} chars).`,
+          promptPrefix: formatPromptContext("Mentioned file", file.path, text)
+        });
+      } else {
+        const attachmentContext = formatMentionedAttachmentContext(file);
+        blocks.push({
+          eventText: `Added @ attachment reference for ${file.path}.`,
+          promptPrefix: formatPromptContext(
+            "Mentioned attachment",
+            file.path,
+            attachmentContext
+          )
+        });
+      }
 
       const directoryContext = this.buildMentionedFileDirectoryContext(file);
       if (directoryContext) {
@@ -1696,6 +1724,64 @@ export default class AgentDashboardPlugin extends Plugin {
         directoryContext
       )
     };
+  }
+
+  private async buildMentionedPdfContext(file: TFile): Promise<PromptContextBlock> {
+    if (file.stat.size > MAX_PDF_CONTEXT_BYTES) {
+      return {
+        eventText: `Added @ PDF reference for ${file.path}; extraction skipped because the file is too large.`,
+        promptPrefix: formatPromptContext(
+          "Mentioned PDF attachment",
+          file.path,
+          formatMentionedAttachmentContext(
+            file,
+            `PDF text extraction skipped because the file is larger than ${(MAX_PDF_CONTEXT_BYTES / 1024 / 1024).toLocaleString()} MB.`
+          )
+        )
+      };
+    }
+
+    try {
+      const data = await this.app.vault.readBinary(file);
+      const extracted = extractPdfText(data, MAX_CONTEXT_CHARS);
+      if (!extracted.text) {
+        return {
+          eventText: `Added @ PDF reference for ${file.path}; no selectable text was extracted.`,
+          promptPrefix: formatPromptContext(
+            "Mentioned PDF attachment",
+            file.path,
+            formatMentionedAttachmentContext(file, extracted.warning)
+          )
+        };
+      }
+
+      return {
+        eventText: `Extracted @ PDF text from ${file.path} (${extracted.text.length.toLocaleString()} chars).`,
+        promptPrefix: formatPromptContext(
+          "Mentioned PDF text",
+          file.path,
+          [
+            `Path: ${file.path}`,
+            `Extracted text blocks: ${extracted.pageLikeBlocks}`,
+            extracted.warning ? `Warning: ${extracted.warning}` : "",
+            "",
+            extracted.text
+          ].filter(Boolean).join("\n")
+        )
+      };
+    } catch (error) {
+      return {
+        eventText: `Added @ PDF reference for ${file.path}; extraction failed.`,
+        promptPrefix: formatPromptContext(
+          "Mentioned PDF attachment",
+          file.path,
+          formatMentionedAttachmentContext(
+            file,
+            `PDF text extraction failed: ${getErrorMessage(error)}`
+          )
+        )
+      };
+    }
   }
 
   private async buildVaultSearchPromptContext(
@@ -2128,6 +2214,27 @@ function getVaultFolderPath(vaultPath: string): string {
 
 function formatVaultFolderLabel(folderPath: string): string {
   return folderPath || "/";
+}
+
+function canReadMentionedFileAsText(file: TFile): boolean {
+  return TEXT_CONTEXT_EXTENSIONS.has(file.extension.toLowerCase());
+}
+
+function formatMentionedAttachmentContext(file: TFile, warning?: string): string {
+  const extension = file.extension || "none";
+  const size = Number.isFinite(file.stat.size)
+    ? `${file.stat.size.toLocaleString()} bytes`
+    : "unknown";
+
+  return [
+    `Path: ${file.path}`,
+    `Extension: ${extension}`,
+    `Size: ${size}`,
+    "",
+    "This file was referenced from the vault but its contents were not extracted as text.",
+    "For PDFs or other binary attachments, do not infer the document contents unless another extracted text context is supplied.",
+    warning ? `Warning: ${warning}` : ""
+  ].filter(Boolean).join("\n");
 }
 
 function getEditProposalInstructions(): string {
@@ -2701,7 +2808,7 @@ function resolveWikiLinkFile(value: string, files: TFile[]): TFile | undefined {
 
   const candidates = getMentionedPathCandidates(target);
   return files.find((file) => {
-    const withoutExtension = file.path.replace(/\.md$/i, "");
+    const withoutExtension = stripVaultFileExtension(file.path);
     const basename = path.basename(withoutExtension);
     return candidates.some(
       (candidate) =>
@@ -2714,12 +2821,21 @@ function resolveWikiLinkFile(value: string, files: TFile[]): TFile | undefined {
 
 function getMentionedPathCandidates(mentionedPath: string): string[] {
   const candidates = [mentionedPath];
+  const extension = path.extname(mentionedPath);
 
-  if (!path.extname(mentionedPath)) {
+  if (!extension) {
     candidates.push(`${mentionedPath}.md`);
+    candidates.push(`${mentionedPath}.pdf`);
+  } else {
+    candidates.push(stripVaultFileExtension(mentionedPath));
   }
 
-  return candidates;
+  return Array.from(new Set(candidates));
+}
+
+function stripVaultFileExtension(vaultPath: string): string {
+  const extension = path.extname(vaultPath);
+  return extension ? vaultPath.slice(0, -extension.length) : vaultPath;
 }
 
 function isMentionBoundary(prompt: string, start: number, end: number): boolean {
