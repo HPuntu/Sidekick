@@ -1,14 +1,10 @@
+Relatively light Obsidian plug I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar/dashboard in Obsidian via Ollama and the Pi agent harness. 
+
+DISCLAIMER I am not a node.js developer, this is a vibe-coded project with oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has node.js experience or any suggestions for improvements I'd be more than happy to hear from you.
+
 # Agent Dashboard
 
-Agent Dashboard is an alpha Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, reviewed edits, and explicit safety boundaries.
-
-This project is not trying to turn Obsidian into a full IDE. The goal is a focused companion panel for reading, reasoning over, and carefully editing notes while the normal Obsidian editor, graph, backlinks, and terminal plugins stay available.
-
-## Status
-
-Current release target: `0.1.0-alpha`.
-
-The plugin is suitable for private alpha or trusted beta testing. It is not yet recommended for broad public use without reading the safety notes below and testing it in a copied vault first.
+Agent Dashboard is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, reviewed edits, and explicit safety boundaries.
 
 ## Features
 
