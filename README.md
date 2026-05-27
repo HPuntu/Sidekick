@@ -1,8 +1,10 @@
+# Local Sidekick
+
 A light Obsidian plugin I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar in Obsidian via Ollama and the Pi agent harness. In other words, turning Obsidian into an ideaspace IDE.
 
 DISCLAIMER: I am not a javascript/node developer. This is a vibe-coded project with human oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has relevant experience or suggestions for improvements, I'd be happy to hear from you. I know that one or two similar agent plugins exist, but I wanted one specifically designed for local agents as a lightweight sidebar chat rather than a full dashboard.
 
-# About
+## About
 Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, tool usage, reviewed edits, and explicit safety boundaries.
 
 ![light_mode](images/light_mode_2.png)
