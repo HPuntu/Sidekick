@@ -36,7 +36,7 @@ export function renderDashboardShell(
 
   const headerEl = containerEl.createDiv({ cls: "agent-dashboard__header" });
   const titleWrapEl = headerEl.createDiv({ cls: "agent-dashboard__title-wrap" });
-  titleWrapEl.createEl("h3", { text: "Agent Dashboard" });
+  titleWrapEl.createEl("h3", { text: "Local Sidekick" });
   titleWrapEl.createEl("p", {
     text: describeDashboard(plugin, options)
   });

@@ -1,13 +1,16 @@
 {
-  "name": "obsidian-agent-dashboard",
+  "name": "obsidian-sidekick",
   "version": "0.1.0",
-  "description": "An Obsidian dashboard surface for local agentic coding workflows.",
+  "description": "A local-first Obsidian sidekick for Pi and Ollama agent workflows.",
   "main": "main.js",
   "scripts": {
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
-    "release:check": "npm run typecheck && npm run build && npm audit --omit=dev",
-    "release:zip": "npm run release:check && mkdir -p dist && zip -j dist/agent-dashboard-0.1.0.zip main.js manifest.json styles.css",
+    "package": "node scripts/package-release.mjs",
+    "release:check": "npm run typecheck && npm run sync:version && npm run build && npm audit --omit=dev",
+    "release:verify-tag": "node scripts/verify-release-tag.mjs",
+    "release:zip": "npm run release:check && npm run package",
+    "sync:version": "node scripts/sync-version.mjs",
     "typecheck": "tsc -noEmit -skipLibCheck"
   },
   "keywords": [
@@ -15,9 +18,10 @@
     "plugin",
     "agent",
     "ollama",
-    "dashboard"
+    "dashboard",
+    "sidekick"
   ],
-  "author": "Agent Dashboard contributors",
+  "author": "HPuntu",
   "license": "MIT",
   "files": [
     "main.js",

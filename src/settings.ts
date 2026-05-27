@@ -53,7 +53,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Agent Dashboard" });
+    containerEl.createEl("h2", { text: "Local Sidekick" });
 
     new Setting(containerEl)
       .setName("Start bridge automatically")
@@ -172,7 +172,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Default model")
-      .setDesc("Optional Ollama model name to preselect in dashboard blocks.")
+      .setDesc("Optional Ollama model name to preselect in sidekick blocks.")
       .addText((text) =>
         text
           .setPlaceholder("qwen2.5-coder:latest")
@@ -186,7 +186,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Compact block height")
-      .setDesc("Default height, in pixels, for embedded dashboard blocks.")
+      .setDesc("Default height, in pixels, for embedded sidekick blocks.")
       .addSlider((slider) =>
         slider
           .setLimits(240, 720, 20)

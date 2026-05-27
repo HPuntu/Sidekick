@@ -128,11 +128,11 @@ export class PiReadOnlyPromptRun {
     });
 
     this.writeJson({
-      id: "agent-dashboard-get-state",
+      id: "local-sidekick-get-state",
       type: "get_state"
     });
     this.writeJson({
-      id: "agent-dashboard-prompt",
+      id: "local-sidekick-prompt",
       message: this.options.prompt,
       type: "prompt"
     });
@@ -144,7 +144,7 @@ export class PiReadOnlyPromptRun {
     }
 
     this.writeJson({
-      id: "agent-dashboard-abort",
+      id: "local-sidekick-abort",
       type: "abort"
     });
     this.complete("Pi read-only prompt stopped.");
@@ -361,7 +361,7 @@ export class PiReadOnlyPromptRun {
 
     this.pendingCompletionMessage = message;
     this.writeJson({
-      id: "agent-dashboard-final-state",
+      id: "local-sidekick-final-state",
       type: "get_state"
     });
   }
@@ -474,7 +474,7 @@ export function setPiRpcModel(
     });
 
     writeJson({
-      id: "agent-dashboard-set-model",
+      id: "local-sidekick-set-model",
       modelId: model.modelId,
       provider: model.provider,
       type: "set_model"
@@ -509,7 +509,7 @@ export function setPiRpcModel(
 
         setModelSucceeded = true;
         writeJson({
-          id: "agent-dashboard-set-model-state",
+          id: "local-sidekick-set-model-state",
           type: "get_state"
         });
         return;

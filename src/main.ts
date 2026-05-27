@@ -235,7 +235,7 @@ export default class AgentDashboardPlugin extends Plugin {
     if (this.settings.autoStartBridge) {
       const snapshot = await this.bridge.start();
       if (snapshot.status === "error") {
-        new Notice(`Agent Dashboard bridge failed: ${snapshot.error}`);
+        new Notice(`Local Sidekick bridge failed: ${snapshot.error}`);
       }
     }
 
@@ -265,25 +265,25 @@ export default class AgentDashboardPlugin extends Plugin {
       })
     );
 
-    this.addRibbonIcon("bot", "Open Agent Dashboard", async () => {
+    this.addRibbonIcon("bot", "Open Local Sidekick", async () => {
       await this.activateView();
     });
 
     this.addCommand({
-      id: "open-agent-dashboard",
-      name: "Open agent dashboard",
+      id: "open-sidekick",
+      name: "Open sidekick",
       callback: async () => {
         await this.activateView();
       }
     });
 
     this.addCommand({
-      id: "insert-agent-dashboard-block",
-      name: "Insert agent dashboard block",
+      id: "insert-sidekick-block",
+      name: "Insert sidekick block",
       editorCallback: (editor) => {
         editor.replaceSelection(
           [
-            "```agent-dashboard",
+            "```sidekick",
             "workspace: vault",
             "mode: compact",
             "session: default",
@@ -294,8 +294,8 @@ export default class AgentDashboardPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "restart-agent-dashboard-bridge",
-      name: "Restart agent dashboard bridge",
+      id: "restart-sidekick-bridge",
+      name: "Restart sidekick bridge",
       callback: async () => {
         const snapshot = await this.bridge.restart();
         this.showBridgeNotice(snapshot.status);
@@ -304,8 +304,8 @@ export default class AgentDashboardPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "stop-agent-dashboard-bridge",
-      name: "Stop agent dashboard bridge",
+      id: "stop-sidekick-bridge",
+      name: "Stop sidekick bridge",
       callback: async () => {
         const snapshot = await this.bridge.stop();
         this.showBridgeNotice(snapshot.status);
@@ -395,7 +395,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     void this.refreshOllamaStatus(false);
 
-    new Notice("Agent Dashboard loaded");
+    new Notice("Local Sidekick loaded");
   }
 
   async onunload(): Promise<void> {
@@ -421,7 +421,7 @@ export default class AgentDashboardPlugin extends Plugin {
       }
 
       if (!leaf) {
-        new Notice("Unable to open Agent Dashboard");
+        new Notice("Unable to open Local Sidekick");
         return;
       }
 
@@ -1108,11 +1108,11 @@ export default class AgentDashboardPlugin extends Plugin {
   private showBridgeNotice(status: string): void {
     const snapshot = this.bridge.getSnapshot();
     if (status === "running" && snapshot.url) {
-      new Notice(`Agent Dashboard bridge running on ${snapshot.url}`);
+    new Notice(`Local Sidekick bridge running on ${snapshot.url}`);
       return;
     }
 
-    new Notice(`Agent Dashboard bridge ${status}`);
+    new Notice(`Local Sidekick bridge ${status}`);
   }
 
   private restorePersistedAgentSession(
@@ -2239,7 +2239,7 @@ function formatMentionedAttachmentContext(file: TFile, warning?: string): string
 
 function getEditProposalInstructions(): string {
   return [
-    "<agent-dashboard-edit-format>",
+    "<local-sidekick-edit-format>",
     "If you propose changes to vault files, include each full-file replacement in this exact fenced format:",
     "```agent-edit",
     "path: path/inside/vault.md",
@@ -2248,7 +2248,7 @@ function getEditProposalInstructions(): string {
     "```",
     "Use this format for reviewed note creation, note updates, frontmatter updates, move/rename notes expressed as replacement files, and conservative internal-linking suggestions.",
     "Do not claim that edits have been applied. The dashboard will show a diff and require approval.",
-    "</agent-dashboard-edit-format>"
+    "</local-sidekick-edit-format>"
   ].join("\n");
 }
 

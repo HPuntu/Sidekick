@@ -1,14 +1,14 @@
-Relatively light Obsidian plug I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar/dashboard in Obsidian via Ollama and the Pi agent harness. 
+Relatively light Obsidian plugin I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar in Obsidian via Ollama and the Pi agent harness.
 
-DISCLAIMER I am not a node.js developer, this is a vibe-coded project with oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has node.js experience or any suggestions for improvements I'd be more than happy to hear from you.
+DISCLAIMER: I am not a Node.js developer. This is a vibe-coded project with oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has Node.js experience or suggestions for improvements, I'd be happy to hear from you. I know that one or two similar agent plugins exist, but I wanted one specifically designed for local agents and as a lightweight sidebar chat rather than a full dashboard.
 
-# Agent Dashboard
+# Local Sidekick
 
-Agent Dashboard is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, reviewed edits, and explicit safety boundaries.
+Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, reviewed edits, and explicit safety boundaries.
 
 ## Features
 
-- Right sidebar agent dashboard for Obsidian desktop.
+- Right sidebar agent workspace for Obsidian desktop.
 - Local model workflow through Pi and Ollama.
 - Persistent chat sessions with a history landing page.
 - Compact model rail with discovered Pi/Ollama models and capability badges.
@@ -23,7 +23,7 @@ Agent Dashboard is an Obsidian plugin that adds a local-first agent chat sidebar
   - `@url(url)` for optional public web fetch context.
 - Reviewed Markdown edit proposals with visible diffs and approval before write.
 - Chat export to Markdown, defaulting to a `Chats/` folder in the vault.
-- Obsidian command palette actions for opening the dashboard, exporting chats, checking Pi/Ollama, and suggesting internal links.
+- Obsidian command palette actions for opening the sidebar, exporting chats, checking Pi/Ollama, and suggesting internal links.
 
 ## Requirements
 
@@ -53,7 +53,7 @@ npm run build
 4. Create this folder in your vault:
 
 ```text
-.obsidian/plugins/agent-dashboard/
+.obsidian/plugins/local-sidekick/
 ```
 
 5. Copy these files into that folder:
@@ -64,7 +64,7 @@ manifest.json
 styles.css
 ```
 
-6. Reload Obsidian and enable `Agent Dashboard` in `Settings -> Community plugins`.
+6. Reload Obsidian and enable `Local Sidekick` in `Settings -> Community plugins`.
 
 For alpha testing, use a copied vault or a small test vault first.
 
@@ -73,18 +73,18 @@ For alpha testing, use a copied vault or a small test vault first.
 1. Start Ollama.
 2. Pull the local models you want to use.
 3. Configure Pi so it can see those models.
-4. In Obsidian, open `Settings -> Agent Dashboard`.
+4. In Obsidian, open `Settings -> Local Sidekick`.
 5. Confirm:
    - `Ollama host` points to your local Ollama server, usually `http://127.0.0.1:11434`.
    - `Pi executable` is either `pi` or the absolute path to your Pi binary.
    - `Pi tools` is `Disabled` until you intentionally enable read-only tools.
-6. Open the dashboard and click `Ollama`, `Pi`, and `RPC` to confirm discovery.
+6. Open the sidebar and click `Ollama`, `Pi`, and `RPC` to confirm discovery.
 
-The dashboard can still be useful without Pi tools. File mentions and local context directives are often safer and more reliable than asking a model to inspect the vault on its own.
+The sidebar can still be useful without Pi tools. File mentions and local context directives are often safer and more reliable than asking a model to inspect the vault on its own.
 
 ## Usage
 
-Open the command palette and run `Open agent dashboard`. The dashboard opens as a right sidebar so your main note stays visible.
+Open the command palette and run `Open sidekick`. Local Sidekick opens as a right sidebar so your main note stays visible.
 
 Start a new chat from the session landing page, or select a previous session. Use the model rail at the top to switch models. Use `@` in the composer to attach vault files as context.
 
@@ -110,7 +110,7 @@ When the agent proposes edits, it must use reviewed edit blocks. The plugin rend
 
 ## Safety Model
 
-Agent Dashboard is built around conservative defaults.
+Local Sidekick is built around conservative defaults.
 
 - The default Pi tool mode is disabled.
 - Read-only Pi tools, when enabled, are limited to `read`, `grep`, `find`, and `ls`.
@@ -163,10 +163,10 @@ Suggested links are rendered as reviewed diffs. They are not applied automatical
 
 The plugin registers these Obsidian commands:
 
-- `Open agent dashboard`
-- `Insert agent dashboard block`
-- `Restart agent dashboard bridge`
-- `Stop agent dashboard bridge`
+- `Open sidekick`
+- `Insert sidekick block`
+- `Restart sidekick bridge`
+- `Stop sidekick bridge`
 - `Check Ollama status`
 - `Check Pi executable`
 - `Discover Pi RPC`
@@ -219,6 +219,8 @@ The release zip contains only:
 ## Release Notes
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+See [RELEASING.md](RELEASING.md) for versioning, git tags, and GitHub release workflow.
 
 ## Security
 

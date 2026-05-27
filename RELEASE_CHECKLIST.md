@@ -22,10 +22,10 @@ Use this checklist before sharing a release publicly.
 
 ## Fresh Vault QA
 
-- [ ] Install the release files into a fresh vault at `.obsidian/plugins/agent-dashboard/`.
+- [ ] Install the release files into a fresh vault at `.obsidian/plugins/local-sidekick/`.
 - [ ] Enable the plugin from Obsidian settings.
-- [ ] Open the dashboard from the command palette.
-- [ ] Confirm the dashboard opens in the right sidebar.
+- [ ] Open Local Sidekick from the command palette.
+- [ ] Confirm Local Sidekick opens in the right sidebar.
 - [ ] Confirm status panel scrolling and agent panel layout.
 - [ ] Confirm session history appears on first open.
 - [ ] Start a new chat by typing in the composer.

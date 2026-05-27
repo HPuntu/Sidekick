@@ -3,7 +3,7 @@ import { ItemView, WorkspaceLeaf } from "obsidian";
 import type AgentDashboardPlugin from "../main";
 import { renderDashboardShell } from "../ui/renderDashboard";
 
-export const AGENT_DASHBOARD_VIEW_TYPE = "agent-dashboard-view";
+export const AGENT_DASHBOARD_VIEW_TYPE = "local-sidekick-view";
 
 export class AgentDashboardView extends ItemView {
   plugin: AgentDashboardPlugin;
@@ -18,7 +18,7 @@ export class AgentDashboardView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Agent Dashboard";
+    return "Local Sidekick";
   }
 
   getIcon(): string {

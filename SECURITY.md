@@ -1,6 +1,6 @@
 # Security
 
-Agent Dashboard is a local-first Obsidian plugin for working with Pi, Ollama, and vault files. It is alpha software. Treat it as a powerful local automation surface and test it in a copied vault before using it on important notes.
+Local Sidekick is a local-first Obsidian plugin for working with Pi, Ollama, and vault files. It is alpha software. Treat it as a powerful local automation surface and test it in a copied vault before using it on important notes.
 
 ## Supported Versions
 

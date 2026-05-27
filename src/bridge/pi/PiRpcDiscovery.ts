@@ -37,8 +37,8 @@ interface RpcResponse {
 }
 
 const DISCOVERY_COMMANDS = [
-  { id: "agent-dashboard-get-state", type: "get_state" },
-  { id: "agent-dashboard-get-models", type: "get_available_models" }
+  { id: "local-sidekick-get-state", type: "get_state" },
+  { id: "local-sidekick-get-models", type: "get_available_models" }
 ];
 
 export function createUnknownPiRpcDiscoverySnapshot(

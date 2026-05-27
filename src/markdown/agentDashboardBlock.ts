@@ -7,16 +7,20 @@ import { renderDashboardShell } from "../ui/renderDashboard";
 export function registerAgentDashboardBlock(
   plugin: AgentDashboardPlugin
 ): void {
-  plugin.registerMarkdownCodeBlockProcessor(
-    "agent-dashboard",
-    (source, el, _ctx: MarkdownPostProcessorContext) => {
-      const options = parseBlockOptions(source);
-      renderDashboardShell(plugin, el, {
-        ...options,
-        embedded: true
-      });
-    }
-  );
+  const renderBlock = (
+    source: string,
+    el: HTMLElement,
+    _ctx: MarkdownPostProcessorContext
+  ) => {
+    const options = parseBlockOptions(source);
+    renderDashboardShell(plugin, el, {
+      ...options,
+      embedded: true
+    });
+  };
+
+  plugin.registerMarkdownCodeBlockProcessor("sidekick", renderBlock);
+  plugin.registerMarkdownCodeBlockProcessor("agent-dashboard", renderBlock);
 }
 
 function parseBlockOptions(source: string): Omit<DashboardRenderOptions, "embedded"> {

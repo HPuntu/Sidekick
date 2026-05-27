@@ -56,7 +56,7 @@ export async function fetchUrlText(
       {
         headers: {
           accept: "text/html,text/plain,application/json;q=0.8,*/*;q=0.5",
-          "user-agent": "obsidian-agent-dashboard/0.1"
+          "user-agent": "obsidian-sidekick/0.1"
         },
         method: "GET"
       },

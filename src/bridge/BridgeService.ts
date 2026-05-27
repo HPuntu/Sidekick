@@ -22,7 +22,7 @@ export interface BridgeSnapshot {
 
 interface BridgeHealthPayload {
   ok: boolean;
-  service: "agent-dashboard-bridge";
+  service: "local-sidekick-bridge";
   version: string;
   status: BridgeStatus;
   uptimeMs: number;
@@ -180,7 +180,7 @@ export class BridgeService {
   }
 
   private isAuthorized(request: IncomingMessage): boolean {
-    const headerToken = request.headers["x-agent-dashboard-token"];
+    const headerToken = request.headers["x-local-sidekick-token"];
     const authHeader = request.headers.authorization;
 
     if (headerToken === this.token) {
@@ -195,7 +195,7 @@ export class BridgeService {
 
     return {
       ok: this.status === "running",
-      service: "agent-dashboard-bridge",
+      service: "local-sidekick-bridge",
       version: this.version,
       status: this.status,
       uptimeMs: startedAtMs ? Date.now() - startedAtMs : 0,

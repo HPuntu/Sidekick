@@ -1,12 +1,12 @@
 # Changelog
 
-## 0.1.0-alpha
+## 0.1.0
 
 Initial alpha release candidate.
 
 ### Added
 
-- Right-sidebar Agent Dashboard view for Obsidian desktop.
+- Right-sidebar Local Sidekick view for Obsidian desktop.
 - Local Pi and Ollama status checks.
 - Pi RPC discovery and model selection.
 - Persistent chat sessions with history view.

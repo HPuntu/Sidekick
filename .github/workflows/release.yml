@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release tag
+        if: github.event_name == 'push'
+        run: npm run release:verify-tag
+
+      - name: Build and package
+        run: npm run release:zip
+
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            main.js \
+            manifest.json \
+            styles.css \
+            dist/obsidian-sidekick-${GITHUB_REF_NAME}.zip \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file CHANGELOG.md
