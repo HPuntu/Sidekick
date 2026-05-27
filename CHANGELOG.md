@@ -1,3 +1,17 @@
+## 0.1.1 - 2026-05-27
+
+- increased overall safety for web fetch and pdf accession among otheres ( see changelog) (8204eb6)
+- versioning and package build release v0.10 implemented (3462dcf)
+- readme update (fbb1639)
+- release commit v0.1.0 (da82f01)
+- up (69ad520)
+- tool usage implemented (fa33b5e)
+- light changes to some stdout readout (706c306)
+- up (f468a92)
+- made the status view panel smaller (2bc507f)
+- added full session history, agent selection and Pi agent RCPa (c6eae36)
+- initial commit (38b3bd8)
+
 # Changelog
 
 ## 0.1.0
