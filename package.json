@@ -1,7 +1,7 @@
 {
   "name": "obsidian-sidekick",
-  "version": "0.1.4",
-  "description": "A local-first Obsidian sidekick for Pi and Ollama agent workflows.",
+  "version": "0.1.0",
+  "description": "A local-first sidekick for Pi and Ollama agent workflows.",
   "main": "main.js",
   "scripts": {
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
@@ -30,7 +30,6 @@
   ],
   "devDependencies": {
     "@types/node": "^20.11.30",
-    "builtin-modules": "^3.3.0",
     "esbuild": "^0.28.0",
     "obsidian": "^1.5.12",
     "tslib": "^2.6.2",
