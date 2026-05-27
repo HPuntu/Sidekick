@@ -1,14 +1,14 @@
-Relatively light Obsidian plugin I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar in Obsidian via Ollama and the Pi agent harness.
+A light Obsidian plugin I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar in Obsidian via Ollama and the Pi agent harness. In other words, turning Obsidian into an ideaspace IDE.
 
-DISCLAIMER: I am not a Node.js developer. This is a vibe-coded project with oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has Node.js experience or suggestions for improvements, I'd be happy to hear from you. I know that one or two similar agent plugins exist, but I wanted one specifically designed for local agents and as a lightweight sidebar chat rather than a full dashboard.
+DISCLAIMER: I am not a javascript/node developer. This is a vibe-coded project with human oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has relevant experience or suggestions for improvements, I'd be happy to hear from you. I know that one or two similar agent plugins exist, but I wanted one specifically designed for local agents as a lightweight sidebar chat rather than a full dashboard.
 
-# Local Sidekick
+# About
+Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, tool usage, reviewed edits, and explicit safety boundaries.
 
-Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, reviewed edits, and explicit safety boundaries.
+![light_mode](images/light_mode.png)
+Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark and light mode. It can be launched from the command palette or from the small AI agent icon on the left toolbar. Doing so will open the interactive dashboard as a tab in the right hand sidebar. An agent status panel at the top of the sidebar gives real time information on the local models being used alongside interactive buttons to find local models. Below a new chat can be started from an interactive prompt box with model selection or a recent chat from session history continued.
 
 ## Features
-
-- Right sidebar agent workspace for Obsidian desktop.
 - Local model workflow through Pi and Ollama.
 - Persistent chat sessions with a history landing page.
 - Compact model rail with discovered Pi/Ollama models and capability badges.
@@ -25,8 +25,10 @@ Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar 
 - Chat export to Markdown, defaulting to a `Chats/` folder in the vault.
 - Obsidian command palette actions for opening the sidebar, exporting chats, checking Pi/Ollama, and suggesting internal links.
 
-## Requirements
+![dark_mode](images/dark_mode.png)
+Chat session agent reply streams are rendered in markdown with your Obsidian theme, handling math and standard formatting. For a full Obsidian IDE experience use the terminal plugin alongside this so you never have to leave Obsidian!
 
+## Requirements
 - Obsidian desktop `1.5.0` or newer.
 - Node.js and npm for building from source.
 - Ollama running locally.
@@ -35,8 +37,12 @@ Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar 
 
 Tool use depends on the selected model. Some Ollama models can chat but do not support tools. When a model does not support tools, keep Pi tools disabled and use explicit `@` context, `@search`, `@semantic`, and `@vault-index` instead.
 
-## Installation From Source
+## Installation 
+You can simply install from the Obsidian app Community Plugins page by searching for "Local Sidekick".
 
+Or install from source...
+
+### From Source
 1. Clone this repository.
 2. Install dependencies:
 
@@ -69,7 +75,6 @@ styles.css
 For alpha testing, use a copied vault or a small test vault first.
 
 ## Pi And Ollama Setup
-
 1. Start Ollama.
 2. Pull the local models you want to use.
 3. Configure Pi so it can see those models.
@@ -83,7 +88,6 @@ For alpha testing, use a copied vault or a small test vault first.
 The sidebar can still be useful without Pi tools. File mentions and local context directives are often safer and more reliable than asking a model to inspect the vault on its own.
 
 ## Usage
-
 Open the command palette and run `Open sidekick`. Local Sidekick opens as a right sidebar so your main note stays visible.
 
 Start a new chat from the session landing page, or select a previous session. Use the model rail at the top to switch models. Use `@` in the composer to attach vault files as context.
@@ -108,8 +112,7 @@ Use @cmd(git status) and tell me whether the vault plugin repo is clean.
 
 When the agent proposes edits, it must use reviewed edit blocks. The plugin renders a diff and requires approval before applying changes.
 
-## Safety Model
-
+## Safety
 Local Sidekick is built around conservative defaults.
 
 - The default Pi tool mode is disabled.
@@ -129,7 +132,6 @@ Local Sidekick is built around conservative defaults.
 These guardrails reduce risk, but they do not make local agent workflows risk-free. Local models can hallucinate, misunderstand paths, or propose incorrect edits. Review diffs before approving them.
 
 ## Local Data And Sync
-
 Local Sidekick stores settings, chat history, proposed edits, approvals, and session metadata in the plugin's Obsidian data file inside the vault configuration. That data is local to your vault, but it may be copied by Obsidian Sync, iCloud, Dropbox, Git, or any other sync/backup tool that includes your `.obsidian` folder.
 
 Treat `.obsidian/plugins/local-sidekick/data.json` as private vault data. It may contain prompts, model replies, note excerpts, proposed file contents, and local settings. Do not publish or share it accidentally.
@@ -137,7 +139,6 @@ Treat `.obsidian/plugins/local-sidekick/data.json` as private vault data. It may
 Because vault plugin data can be imported from someone else, Local Sidekick asks for per-session confirmation before using a non-default Pi executable path or before launching Pi with experimental extensions, skills, prompt templates, and context files enabled. Keep `Pi executable` set to `pi` and experimental Pi features disabled unless you intentionally trust the configured behavior.
 
 ## Experimental Pi Features
-
 By default, Local Sidekick starts Pi with extensions, skills, prompt templates, and context files disabled for prompt runs. This keeps the plugin's behavior narrow and makes vault context explicit.
 
 Advanced users can enable `Allow Pi extensions, skills, prompt templates, and context files` under the `Experimental` settings section. When enabled, Local Sidekick stops passing the Pi flags that disable those features, so Pi may load whatever your Pi configuration, extensions, skills, prompt templates, or context files define. This path is not the default because it has not been fully tested with Local Sidekick's safety model and may add extra tools or context outside the plugin's own UI.
@@ -145,7 +146,6 @@ Advanced users can enable `Allow Pi extensions, skills, prompt templates, and co
 Pi tools are separate. They remain disabled by default. The only supported Pi tool mode in the plugin UI is the read-only tool allowlist: `read`, `grep`, `find`, and `ls`. Broader Pi tool use is intentionally not exposed yet.
 
 ## PDF Support
-
 PDF mention support is best-effort. The plugin tries to extract text from common text-based PDFs inside the vault and adds that text as prompt context.
 
 Limitations:
@@ -160,13 +160,11 @@ Limitations:
 When PDF extraction fails, the plugin should tell the model that content was unavailable rather than letting it infer details from the filename.
 
 ## Internal Link Suggestions
-
 The internal link tool is intentionally conservative. It builds candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and proposes links only when meaningful visible terms appear in the current note.
 
 Suggested links are rendered as reviewed diffs. They are not applied automatically.
 
 ## Known Limitations
-
 - This is alpha software.
 - Local models may hallucinate unless given exact context.
 - Some Ollama models do not support tools.
@@ -178,7 +176,6 @@ Suggested links are rendered as reviewed diffs. They are not applied automatical
 - Public release metadata still needs maintainer-specific details before a Community Plugin submission.
 
 ## Commands
-
 The plugin registers these Obsidian commands:
 
 - `Open sidekick`
@@ -196,50 +193,3 @@ The plugin registers these Obsidian commands:
 - `Run agent safety self-check`
 - `Create sample approval request`
 
-## Development
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run typecheck:
-
-```bash
-npm run typecheck
-```
-
-Build:
-
-```bash
-npm run build
-```
-
-Run the release readiness checks:
-
-```bash
-npm run release:check
-```
-
-Create a local release zip:
-
-```bash
-npm run release:zip
-```
-
-The release zip contains only:
-
-- `main.js`
-- `manifest.json`
-- `styles.css`
-
-## Release Notes
-
-See [CHANGELOG.md](CHANGELOG.md).
-
-See [RELEASING.md](RELEASING.md) for versioning, git tags, and GitHub release workflow.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) before enabling tools, safe commands, web fetch, or reviewed edits in an important vault.
