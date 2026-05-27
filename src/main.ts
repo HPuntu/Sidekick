@@ -791,6 +791,15 @@ export default class AgentDashboardPlugin extends Plugin {
       return false;
     }
 
+    const sessionFolderError = await this.preparePiSessionFolder();
+    if (sessionFolderError) {
+      this.agentSessionStatus = "idle";
+      this.addAgentEvent("status", sessionFolderError);
+      new Notice(sessionFolderError);
+      this.refreshDashboardViews();
+      return false;
+    }
+
     this.addAgentEvent(
       "tool",
       `Safety guard allowed prompt: ${promptDecision.reason}`
@@ -1030,9 +1039,17 @@ export default class AgentDashboardPlugin extends Plugin {
       return;
     }
 
+    const sessionPath = this.getPiSessionPath();
+    const sessionFolderError = await this.preparePiSessionFolder();
+    if (sessionFolderError) {
+      this.addAgentEvent("status", sessionFolderError);
+      this.refreshDashboardViews();
+      return;
+    }
+
     const result = await setPiRpcModel(
       this.settings.piExecutablePath,
-      this.getPiSessionPath(),
+      sessionPath,
       modelLabel,
       5000,
       this.settings.piExperimentalFeaturesEnabled
@@ -1384,23 +1401,62 @@ export default class AgentDashboardPlugin extends Plugin {
 
   private getPiSessionPath(): string | undefined {
     const vaultRoot = this.getVaultRoot();
-    if (!vaultRoot) {
+    const sessionFolder = this.getPiSessionVaultFolderPath();
+    if (!vaultRoot || !sessionFolder) {
       return undefined;
     }
 
-    const pluginDir = this.manifest.dir
-      ? path.join(vaultRoot, this.manifest.dir)
-      : path.join(
-          vaultRoot,
-          this.app.vault.configDir,
-          "plugins",
-          this.manifest.id
-        );
     const sessionName = sanitizeSessionFileName(
       this.settings.agentSessionName || DEFAULT_SETTINGS.agentSessionName
     );
 
-    return path.join(pluginDir, "pi-sessions", `${sessionName}.jsonl`);
+    return path.join(vaultRoot, sessionFolder, sessionName + ".jsonl");
+  }
+
+  private getPiSessionVaultFolderPath(): string | undefined {
+    if (!this.getVaultRoot()) {
+      return undefined;
+    }
+
+    const pluginDir = this.manifest.dir
+      ? normalizeVaultFolderPath(this.manifest.dir)
+      : normalizeVaultFolderPath(
+          path.posix.join(this.app.vault.configDir, "plugins", this.manifest.id)
+        );
+
+    return normalizeVaultFolderPath(path.posix.join(pluginDir, "pi-sessions"));
+  }
+
+  private async preparePiSessionFolder(): Promise<string | undefined> {
+    const folderPath = this.getPiSessionVaultFolderPath();
+    if (!folderPath) {
+      return undefined;
+    }
+
+    try {
+      await this.ensureVaultAdapterFolder(folderPath);
+      return undefined;
+    } catch (error) {
+      return `Unable to prepare Pi session folder: ${getErrorMessage(error)}`;
+    }
+  }
+
+  private async ensureVaultAdapterFolder(folderPath: string): Promise<void> {
+    const normalized = normalizeVaultFolderPath(folderPath);
+    if (!normalized) {
+      return;
+    }
+
+    const segments = normalized.split("/");
+    let currentPath = "";
+    for (const segment of segments) {
+      currentPath = currentPath ? currentPath + "/" + segment : segment;
+      if (await this.app.vault.adapter.exists(currentPath)) {
+        continue;
+      }
+
+      await this.app.vault.adapter.mkdir(currentPath);
+    }
   }
 
   private async ensureVaultFolder(folderPath: string): Promise<void> {

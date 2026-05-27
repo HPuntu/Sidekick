@@ -23,9 +23,11 @@ Default behavior is conservative:
 - Pi tools are disabled by default.
 - Read-only Pi mode enables only `read`, `grep`, `find`, and `ls`.
 - Pi `bash`, edit, and write tools are disabled by the plugin.
-- Safe commands are exact allowlist entries only.
+- The plugin does launch local processes for Pi integration. This is required for local agent execution, model discovery, model switching, and prompt streaming.
+- Pi and safe commands are launched without a shell, so shell expansion, pipes, redirects, and command chaining are not available through these paths.
+- The Pi executable is `pi` by default. Non-default executable paths require once-per-Obsidian-session confirmation because vault settings can be imported from elsewhere.
+- Safe commands are exact allowlist entries only and can be configured in settings.
 - The default safe command allowlist is intentionally narrow: `git status` and `git diff --stat`.
-- Safe commands run without a shell.
 - File writes require reviewed Markdown diffs and explicit approval.
 - Deletes are blocked.
 - URL fetching is disabled by default.
@@ -50,6 +52,7 @@ Obsidian plugin data lives inside the vault. If you open a vault from someone el
 - A model with tool support may still misunderstand tool output.
 - Best-effort PDF extraction can miss text or fail on scanned, encrypted, malicious, or unusual PDFs. Compressed and decompressed stream limits reduce denial-of-service risk but do not make the parser a complete PDF sandbox.
 - Approved edits are real writes to your vault.
+- Vault search, file mentions, the vault index helper, and internal-link suggestions enumerate vault files locally so they can offer relevant context and path suggestions.
 - Safe commands are only as safe as the commands you allowlist. Package-manager scripts can execute arbitrary project code and should not be added unless you trust the repo.
 - Any optional web fetch feature can expose requested URLs to the remote server hosting that URL.
 

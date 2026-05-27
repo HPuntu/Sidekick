@@ -120,8 +120,10 @@ Local Sidekick is built around conservative defaults.
 - The default Pi tool mode is disabled.
 - Read-only Pi tools, when enabled, are limited to `read`, `grep`, `find`, and `ls`.
 - Pi `bash`, edit, and write tools are not enabled by the plugin.
-- Shell execution is not generally available.
-- `@cmd(...)` only runs exact commands listed in the safe command allowlist.
+- The plugin launches the local Pi executable to run the agent. This is necessary for local agent workflows and is why automated review tools may report shell/process execution.
+- Pi is launched without a shell. The executable is `pi` by default, and non-default executable paths require per-session confirmation.
+- Shell execution is not generally available to the model or chat.
+- `@cmd(...)` only runs exact commands listed in the safe command allowlist, which you can edit in settings.
 - The default safe command allowlist is intentionally narrow: `git status` and `git diff --stat`.
 - Safe commands run without a shell and from the vault root. Avoid adding package-manager scripts unless you trust the vault/repo.
 - File writes require reviewed Markdown edit proposals and user approval.
@@ -137,6 +139,8 @@ These guardrails reduce risk, but they do not make local agent workflows risk-fr
 Local Sidekick stores settings, chat history, proposed edits, approvals, and session metadata in the plugin's Obsidian data file inside the vault configuration. That data is local to your vault, but it may be copied by Obsidian Sync, iCloud, Dropbox, Git, or any other sync/backup tool that includes your `.obsidian` folder.
 
 Treat `.obsidian/plugins/local-sidekick/data.json` as private vault data. It may contain prompts, model replies, note excerpts, proposed file contents, and local settings. Do not publish or share it accidentally.
+
+Persistent Pi session files are stored under the plugin folder in your vault configuration. Local Sidekick prepares that folder through Obsidian's vault adapter before launching Pi.
 
 Because vault plugin data can be imported from someone else, Local Sidekick asks for per-session confirmation before using a non-default Pi executable path or before launching Pi with experimental extensions, skills, prompt templates, and context files enabled. Keep `Pi executable` set to `pi` and experimental Pi features disabled unless you intentionally trust the configured behavior.
 

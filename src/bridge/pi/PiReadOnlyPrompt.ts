@@ -1,5 +1,4 @@
 import { ChildProcessWithoutNullStreams, spawn } from "child_process";
-import { mkdirSync } from "fs";
 import path from "path";
 
 export interface PiReadOnlyPromptOptions {
@@ -88,12 +87,6 @@ export class PiReadOnlyPromptRun {
     const validationError = validateExecutablePath(this.options.executablePath);
     if (validationError) {
       this.fail(validationError);
-      return;
-    }
-
-    const sessionError = prepareSessionPath(this.options.sessionPath);
-    if (sessionError) {
-      this.fail(sessionError);
       return;
     }
 
@@ -409,11 +402,6 @@ export function setPiRpcModel(
     return Promise.resolve({ error: validationError, success: false });
   }
 
-  const sessionError = prepareSessionPath(sessionPath ?? "");
-  if (sessionError) {
-    return Promise.resolve({ error: sessionError, success: false });
-  }
-
   const model = parseModelLabel(modelLabel);
   if (!model) {
     return Promise.resolve({
@@ -624,20 +612,6 @@ function validateExecutablePath(executablePath: string): string | undefined {
 
   if (!path.isAbsolute(executablePath) && /\s/.test(executablePath)) {
     return "Command names cannot include arguments or whitespace. Use only the executable path.";
-  }
-
-  return undefined;
-}
-
-function prepareSessionPath(sessionPath: string): string | undefined {
-  if (!sessionPath) {
-    return undefined;
-  }
-
-  try {
-    mkdirSync(path.dirname(sessionPath), { recursive: true });
-  } catch (error) {
-    return `Unable to prepare Pi session directory: ${getErrorMessage(error)}`;
   }
 
   return undefined;

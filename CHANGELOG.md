@@ -1,3 +1,8 @@
+## Unreleased
+
+- Prepare Pi session folders through the Obsidian vault adapter instead of runtime Node fs access.
+- Clarify shell execution, Pi launch, safe command allowlist, and vault enumeration boundaries in public docs.
+
 ## 0.1.5 - 2026-05-27
 
 - Merge remote-tracking branch 'origin/dev' (69325b6)
