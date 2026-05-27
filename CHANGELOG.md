@@ -1,3 +1,11 @@
+## 0.1.5 - 2026-05-27
+
+- Merge remote-tracking branch 'origin/dev' (69325b6)
+- Fix release version selection (c56d31d)
+- Merge pull request #1 from HPuntu/dev (acab437)
+- Merge branch 'main' into dev (59c8dbb)
+- Fix community plugin review issues (667057f)
+
 ## 0.1.4 - 2026-05-27
 
 - Merge remote-tracking branch 'origin/main' (cc643c1)
