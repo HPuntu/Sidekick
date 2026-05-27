@@ -11,6 +11,7 @@ export interface AgentDashboardSettings {
   piPromptTimeoutMinutes: number;
   piExecutablePath: string;
   selectedPiModel: string;
+  statusPanelHeight: number;
   ollamaHost: string;
   defaultModel: string;
   compactBlockHeight: number;
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   piPromptTimeoutMinutes: 10,
   piExecutablePath: "pi",
   selectedPiModel: "",
+  statusPanelHeight: 160,
   ollamaHost: "http://127.0.0.1:11434",
   defaultModel: "",
   compactBlockHeight: 360,
@@ -195,6 +197,21 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.compactBlockHeight = value;
             await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Status panel height")
+      .setDesc("Default sidebar status panel height. You can also drag the divider between Status and Agent.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(96, 420, 8)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.statusPanelHeight)
+          .onChange(async (value) => {
+            this.plugin.settings.statusPanelHeight = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshDashboardViews();
           })
       );
 

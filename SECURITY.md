@@ -30,7 +30,7 @@ Default behavior is conservative:
 - Deletes are blocked.
 - URL fetching is disabled by default.
 - URL fetching requires HTTPS and an explicit host allowlist.
-- URL fetching resolves DNS and blocks localhost, private, link-local, multicast, and metadata-style addresses.
+- URL fetching resolves DNS and blocks localhost, private, link-local, reserved, multicast, and metadata-style addresses.
 
 ## Experimental Pi Features
 
@@ -64,4 +64,4 @@ Obsidian plugin data lives inside the vault. If you open a vault from someone el
 
 ## Reporting Issues
 
-For now, report security issues privately to the maintainer channel attached to the release. If this repository is published publicly, add a private vulnerability reporting route before broad distribution.
+Please report security issues privately through GitHub Private Vulnerability Reporting for this repository, if available. If that route is unavailable, open a minimal public issue asking for a private contact path and do not include exploit details, private vault contents, tokens, prompts, or proof-of-concept payloads in the public issue.

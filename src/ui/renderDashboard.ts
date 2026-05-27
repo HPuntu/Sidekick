@@ -19,6 +19,10 @@ export interface DashboardRenderOptions {
   session?: string;
   model?: string;
 }
+const STATUS_PANEL_MIN_HEIGHT = 96;
+const STATUS_PANEL_MAX_HEIGHT = 420;
+const AGENT_PANEL_MIN_HEIGHT = 220;
+const PANEL_RESIZE_KEY_STEP = 16;
 
 export function renderDashboardShell(
   plugin: AgentDashboardPlugin,
@@ -36,7 +40,11 @@ export function renderDashboardShell(
 
   const headerEl = containerEl.createDiv({ cls: "agent-dashboard__header" });
   const titleWrapEl = headerEl.createDiv({ cls: "agent-dashboard__title-wrap" });
-  titleWrapEl.createEl("h3", { text: "Local Sidekick" });
+  const titleIconEl = titleWrapEl.createSpan({
+    attr: { "aria-label": "Local Sidekick", title: "Local Sidekick" },
+    cls: "agent-dashboard__title-icon"
+  });
+  setIcon(titleIconEl, "bot");
   titleWrapEl.createEl("p", {
     text: describeDashboard(plugin, options)
   });
@@ -57,7 +65,10 @@ export function renderDashboardShell(
     });
 
   const bodyEl = containerEl.createDiv({ cls: "agent-dashboard__body" });
-  renderStatusPanel(plugin, bodyEl, options);
+  const statusPanelEl = renderStatusPanel(plugin, bodyEl, options);
+  if (!options.embedded) {
+    renderPanelResizeHandle(plugin, bodyEl, statusPanelEl);
+  }
   renderAgentPanel(plugin, bodyEl, options);
 }
 
@@ -65,10 +76,15 @@ function renderStatusPanel(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
   options: DashboardRenderOptions
-): void {
+): HTMLElement {
   const panelEl = containerEl.createDiv({
     cls: "agent-dashboard__panel agent-dashboard__panel--status"
   });
+  setStatusPanelHeight(
+    panelEl,
+    plugin.settings.statusPanelHeight,
+    getMaxStatusPanelHeight(containerEl)
+  );
   const headingEl = panelEl.createDiv({ cls: "agent-dashboard__panel-heading" });
   headingEl.createEl("h4", { text: "Status" });
 
@@ -139,6 +155,140 @@ function renderStatusPanel(
   );
   renderStatusItem(listEl, "Workspace", options.workspace ?? "vault");
   renderStatusItem(listEl, "Session", plugin.getAgentSessionSummary());
+
+  return panelEl;
+}
+
+function renderPanelResizeHandle(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  statusPanelEl: HTMLElement
+): void {
+  const handleEl = containerEl.createDiv({
+    cls: "agent-dashboard__panel-resize-handle"
+  });
+  handleEl.setAttr("role", "separator");
+  handleEl.setAttr("aria-orientation", "horizontal");
+  handleEl.setAttr("aria-label", "Resize status and agent panels");
+  handleEl.setAttr("tabindex", "0");
+  handleEl.setAttr("title", "Drag to resize Status and Agent panels");
+  updateResizeHandleValue(handleEl, plugin.settings.statusPanelHeight, containerEl);
+
+  handleEl.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = statusPanelEl.getBoundingClientRect().height;
+    const ownerDocument = handleEl.ownerDocument;
+    containerEl.addClass("is-resizing-panels");
+
+    const updateHeight = (clientY: number): void => {
+      const nextHeight = clampStatusPanelHeight(
+        startHeight + clientY - startY,
+        getMaxStatusPanelHeight(containerEl)
+      );
+      setStatusPanelHeight(statusPanelEl, nextHeight);
+      plugin.settings.statusPanelHeight = Math.round(nextHeight);
+      updateResizeHandleValue(handleEl, nextHeight, containerEl);
+    };
+
+    const onPointerMove = (moveEvent: PointerEvent): void => {
+      moveEvent.preventDefault();
+      updateHeight(moveEvent.clientY);
+    };
+
+    const stopResize = (): void => {
+      ownerDocument.removeEventListener("pointermove", onPointerMove);
+      ownerDocument.removeEventListener("pointerup", stopResize);
+      ownerDocument.removeEventListener("pointercancel", stopResize);
+      containerEl.removeClass("is-resizing-panels");
+      void plugin.saveSettings();
+    };
+
+    ownerDocument.addEventListener("pointermove", onPointerMove);
+    ownerDocument.addEventListener("pointerup", stopResize);
+    ownerDocument.addEventListener("pointercancel", stopResize);
+  });
+
+  handleEl.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextHeight = clampStatusPanelHeight(
+      plugin.settings.statusPanelHeight + direction * PANEL_RESIZE_KEY_STEP,
+      getMaxStatusPanelHeight(containerEl)
+    );
+    plugin.settings.statusPanelHeight = Math.round(nextHeight);
+    setStatusPanelHeight(statusPanelEl, nextHeight);
+    updateResizeHandleValue(handleEl, nextHeight, containerEl);
+    void plugin.saveSettings();
+  });
+
+  handleEl.addEventListener("dblclick", () => {
+    const nextHeight = clampStatusPanelHeight(
+      160,
+      getMaxStatusPanelHeight(containerEl)
+    );
+    plugin.settings.statusPanelHeight = Math.round(nextHeight);
+    setStatusPanelHeight(statusPanelEl, nextHeight);
+    updateResizeHandleValue(handleEl, nextHeight, containerEl);
+    void plugin.saveSettings();
+  });
+}
+
+function setStatusPanelHeight(
+  panelEl: HTMLElement,
+  height: number,
+  maxHeight = STATUS_PANEL_MAX_HEIGHT
+): void {
+  const nextHeight = clampStatusPanelHeight(height, maxHeight);
+  panelEl.style.flexBasis = nextHeight + "px";
+  panelEl.style.height = nextHeight + "px";
+}
+
+function updateResizeHandleValue(
+  handleEl: HTMLElement,
+  height: number,
+  containerEl: HTMLElement
+): void {
+  handleEl.setAttr("aria-valuemin", String(STATUS_PANEL_MIN_HEIGHT));
+  handleEl.setAttr("aria-valuemax", String(getMaxStatusPanelHeight(containerEl)));
+  handleEl.setAttr("aria-valuenow", String(Math.round(height)));
+}
+
+function getMaxStatusPanelHeight(containerEl: HTMLElement): number {
+  const containerHeight = containerEl.getBoundingClientRect().height;
+  if (!Number.isFinite(containerHeight) || containerHeight <= 0) {
+    return STATUS_PANEL_MAX_HEIGHT;
+  }
+
+  const availableHeight = Math.floor(
+    containerHeight - AGENT_PANEL_MIN_HEIGHT - 24
+  );
+  return Math.max(
+    STATUS_PANEL_MIN_HEIGHT,
+    Math.min(STATUS_PANEL_MAX_HEIGHT, availableHeight)
+  );
+}
+
+function clampStatusPanelHeight(
+  height: number,
+  maxHeight = STATUS_PANEL_MAX_HEIGHT
+): number {
+  if (!Number.isFinite(height)) {
+    return 160;
+  }
+
+  return Math.min(
+    maxHeight,
+    Math.max(STATUS_PANEL_MIN_HEIGHT, Math.round(height))
+  );
 }
 
 function renderBridgeStatusItem(
@@ -818,9 +968,12 @@ function renderSessionHistoryItem(
   options: DashboardRenderOptions,
   session: AgentSessionHistoryItem
 ): void {
-  const itemEl = containerEl.createEl("button", {
-    cls: "agent-dashboard__session-item",
-    type: "button"
+  const itemEl = containerEl.createDiv({
+    attr: {
+      role: "button",
+      tabindex: "0"
+    },
+    cls: "agent-dashboard__session-item"
   });
   itemEl.createDiv({
     cls: "agent-dashboard__session-title",
@@ -841,9 +994,19 @@ function renderSessionHistoryItem(
     metaEl.createSpan({ text: session.piSessionId.slice(0, 8) });
   }
 
-  itemEl.addEventListener("click", () => {
+  const openSession = (): void => {
     void plugin.openAgentSession(session.name);
     renderDashboardShell(plugin, rootEl, options);
+  };
+
+  itemEl.addEventListener("click", openSession);
+  itemEl.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    event.preventDefault();
+    openSession();
   });
 }
 

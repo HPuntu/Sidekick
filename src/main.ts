@@ -2705,6 +2705,7 @@ function normalizeSettings(
     ),
     piToolMode: settings.piToolMode === "read-only" ? "read-only" : "disabled",
     piExperimentalFeaturesEnabled: settings.piExperimentalFeaturesEnabled === true,
+    statusPanelHeight: normalizeStatusPanelHeight(settings.statusPanelHeight),
     safeCommandAllowlist:
       settings.safeCommandAllowlist ?? DEFAULT_SETTINGS.safeCommandAllowlist,
     webFetchAllowedHosts:
@@ -2720,6 +2721,15 @@ function normalizePiPromptTimeout(value: unknown): number {
   }
 
   return Math.min(30, Math.max(2, Math.round(timeout)));
+}
+
+function normalizeStatusPanelHeight(value: unknown): number {
+  const height = typeof value === "number" ? value : DEFAULT_SETTINGS.statusPanelHeight;
+  if (!Number.isFinite(height)) {
+    return DEFAULT_SETTINGS.statusPanelHeight;
+  }
+
+  return Math.min(420, Math.max(96, Math.round(height)));
 }
 
 function createAgentSessionName(): string {

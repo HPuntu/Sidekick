@@ -123,7 +123,7 @@ Local Sidekick is built around conservative defaults.
 - Deletes are blocked.
 - Writes outside the vault are blocked.
 - URL fetching is disabled by default.
-- `@url(...)` requires HTTPS, requires an explicit host allowlist, and blocks localhost/private/link-local/metadata IP ranges after DNS resolution.
+- `@url(...)` requires HTTPS, requires an explicit host allowlist, and blocks localhost/private/link-local/reserved/metadata IP ranges after DNS resolution.
 - External workspace roots are opt-in and read-only.
 
 These guardrails reduce risk, but they do not make local agent workflows risk-free. Local models can hallucinate, misunderstand paths, or propose incorrect edits. Review diffs before approving them.
