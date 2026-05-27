@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
+    "release:check": "npm run typecheck && npm run build && npm audit --omit=dev",
+    "release:zip": "npm run release:check && mkdir -p dist && zip -j dist/agent-dashboard-0.1.0.zip main.js manifest.json styles.css",
     "typecheck": "tsc -noEmit -skipLibCheck"
   },
   "keywords": [
@@ -15,8 +17,13 @@
     "ollama",
     "dashboard"
   ],
-  "author": "",
+  "author": "Agent Dashboard contributors",
   "license": "MIT",
+  "files": [
+    "main.js",
+    "manifest.json",
+    "styles.css"
+  ],
   "devDependencies": {
     "@types/node": "^20.11.30",
     "builtin-modules": "^3.3.0",
