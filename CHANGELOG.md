@@ -1,3 +1,8 @@
+## 0.1.2 - 2026-05-27
+
+- Merge remote-tracking branch 'origin/main' (8dc076f)
+- several updates to ui (dab3a4a)
+
 ## 0.1.1 - 2026-05-27
 
 - increased overall safety for web fetch and pdf accession among otheres ( see changelog) (8204eb6)
