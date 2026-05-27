@@ -1,0 +1,96 @@
+name: Promote Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Decide version bump
+        id: bump
+        run: |
+          RANGE="${{ github.event.before }}..${{ github.sha }}"
+          COMMITS=$(git log --format=%B "$RANGE" 2>/dev/null || git log -1 --format=%B)
+          if echo "$COMMITS" | grep -Eiq 'BREAKING CHANGE|\[major\]|#major'; then
+            BUMP=major
+          elif echo "$COMMITS" | grep -Eiq '\[minor\]|#minor|feat(\(.+\))?:'; then
+            BUMP=minor
+          else
+            BUMP=patch
+          fi
+          echo "type=${BUMP}" >> "$GITHUB_OUTPUT"
+          echo "Selected ${BUMP} release bump"
+
+      - name: Bump version
+        run: |
+          npm version "${{ steps.bump.outputs.type }}" --no-git-tag-version
+          npm run sync:version
+
+      - name: Update changelog
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          {
+            echo "## ${VERSION} - $(date -u +%Y-%m-%d)"
+            echo
+            if [ -n "$LAST_TAG" ]; then
+              git log --pretty="- %s (%h)" "${LAST_TAG}..${{ github.sha }}"
+            else
+              git log --pretty="- %s (%h)"
+            fi
+            echo
+            cat CHANGELOG.md
+          } > CHANGELOG.new
+          mv CHANGELOG.new CHANGELOG.md
+
+      - run: npm run release:check
+      - run: npm run package
+
+      - name: Commit version update
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          git add package.json package-lock.json manifest.json versions.json CHANGELOG.md
+          git commit -m "Release ${VERSION}"
+          git tag "${VERSION}"
+
+      - name: Push commit and tag
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          git push origin HEAD:main
+          git push origin "${VERSION}"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          gh release create "${VERSION}" \
+            main.js \
+            manifest.json \
+            styles.css \
+            "dist/obsidian-sidekick-${VERSION}.zip" \
+            --title "${VERSION}" \
+            --notes-file CHANGELOG.md

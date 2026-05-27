@@ -219,6 +219,8 @@ export default class AgentDashboardPlugin extends Plugin {
   private approvalCounter = 0;
   private proposedEditCounter = 0;
   private activePromptRun?: PiReadOnlyPromptRun;
+  private confirmedPiExecutablePaths = new Set<string>([DEFAULT_SETTINGS.piExecutablePath]);
+  private confirmedExperimentalPiFeatures = false;
   private agentSessionRecords: PersistedAgentSessionRecord[] = [];
   private lastMarkdownFileInfo: MarkdownFileInfo | null = null;
   private savePluginDataTimeout?: number;
@@ -632,6 +634,10 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   async refreshPiStatus(showNotice: boolean): Promise<void> {
+    if (!(await this.confirmPiExecutableForSession("check Pi executable"))) {
+      return;
+    }
+
     this.assessSafetyRequest({
       kind: "diagnostic",
       command: `${this.settings.piExecutablePath} --version`,
@@ -658,9 +664,17 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   async refreshPiRpcDiscovery(showNotice: boolean): Promise<void> {
+    if (!(await this.confirmPiExecutableForSession("discover Pi RPC"))) {
+      return;
+    }
+
+    if (!(await this.confirmPiExperimentalFeaturesForSession("discover Pi RPC"))) {
+      return;
+    }
+
     this.assessSafetyRequest({
       kind: "diagnostic",
-      command: `${this.settings.piExecutablePath} --mode rpc --no-session`,
+      command: `${this.settings.piExecutablePath} --mode rpc --no-session ${formatPiExperimentalFeatureFlag(this.settings.piExperimentalFeaturesEnabled)}`,
       description: "Discover Pi RPC readiness"
     });
     this.piRpcDiscoverySnapshot = createCheckingPiRpcDiscoverySnapshot(
@@ -669,7 +683,8 @@ export default class AgentDashboardPlugin extends Plugin {
     this.refreshDashboardViews();
 
     this.piRpcDiscoverySnapshot = await this.bridge.discoverPiRpc(
-      this.settings.piExecutablePath
+      this.settings.piExecutablePath,
+      this.settings.piExperimentalFeaturesEnabled
     );
     this.refreshDashboardViews();
 
@@ -698,6 +713,14 @@ export default class AgentDashboardPlugin extends Plugin {
 
     if (this.agentSessionStatus === "running") {
       new Notice("Agent is already running");
+      return false;
+    }
+
+    if (!(await this.confirmPiExecutableForSession("run a Pi prompt"))) {
+      return false;
+    }
+
+    if (!(await this.confirmPiExperimentalFeaturesForSession("run a Pi prompt"))) {
       return false;
     }
 
@@ -754,7 +777,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     const promptDecision = this.assessSafetyRequest({
       kind: "prompt",
-      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)}`,
+      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)} ${formatPiExperimentalFeatureFlag(this.settings.piExperimentalFeaturesEnabled)}`,
       description: `Run Pi prompt with ${describePiToolMode(toolMode)}`
     });
 
@@ -982,6 +1005,14 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   async selectPiModel(modelLabel: string): Promise<void> {
+    if (!(await this.confirmPiExecutableForSession("set the Pi model"))) {
+      return;
+    }
+
+    if (!(await this.confirmPiExperimentalFeaturesForSession("set the Pi model"))) {
+      return;
+    }
+
     this.settings.selectedPiModel = modelLabel;
     await this.saveSettings();
     if (!modelLabel) {
@@ -1002,7 +1033,9 @@ export default class AgentDashboardPlugin extends Plugin {
     const result = await setPiRpcModel(
       this.settings.piExecutablePath,
       this.getPiSessionPath(),
-      modelLabel
+      modelLabel,
+      5000,
+      this.settings.piExperimentalFeaturesEnabled
     );
 
     if (result.success) {
@@ -1286,6 +1319,68 @@ export default class AgentDashboardPlugin extends Plugin {
 
     return undefined;
   }
+
+
+  private async confirmPiExecutableForSession(action: string): Promise<boolean> {
+    const executablePath =
+      this.settings.piExecutablePath.trim() || DEFAULT_SETTINGS.piExecutablePath;
+
+    if (executablePath === DEFAULT_SETTINGS.piExecutablePath) {
+      return true;
+    }
+
+    if (this.confirmedPiExecutablePaths.has(executablePath)) {
+      return true;
+    }
+
+    const confirmed = await confirmLocalRisk(
+      this.app,
+      "Confirm Pi executable",
+      [
+        `This vault configures Pi executable: ${executablePath}`,
+        `Action: ${action}.`,
+        "Only continue if you trust this vault's Local Sidekick settings. This confirmation is remembered only for the current Obsidian session."
+      ].join("\n\n")
+    );
+
+    if (confirmed) {
+      this.confirmedPiExecutablePaths.add(executablePath);
+      return true;
+    }
+
+    new Notice("Pi executable action cancelled");
+    return false;
+  }
+  private async confirmPiExperimentalFeaturesForSession(
+    action: string
+  ): Promise<boolean> {
+    if (!this.settings.piExperimentalFeaturesEnabled) {
+      return true;
+    }
+
+    if (this.confirmedExperimentalPiFeatures) {
+      return true;
+    }
+
+    const confirmed = await confirmLocalRisk(
+      this.app,
+      "Confirm experimental Pi features",
+      [
+        "This vault has experimental Pi extensions, skills, prompt templates, and context files enabled.",
+        "Action: " + action + ".",
+        "Local Sidekick will stop passing the flags that disable those Pi features. Only continue if you trust this vault and your Pi configuration. This confirmation is remembered only for the current Obsidian session."
+      ].join("\n\n")
+    );
+
+    if (confirmed) {
+      this.confirmedExperimentalPiFeatures = true;
+      return true;
+    }
+
+    new Notice("Experimental Pi feature action cancelled");
+    return false;
+  }
+
 
   private getPiSessionPath(): string | undefined {
     const vaultRoot = this.getVaultRoot();
@@ -2018,7 +2113,8 @@ export default class AgentDashboardPlugin extends Plugin {
         sessionPath,
         timeoutMs: this.settings.piPromptTimeoutMinutes * 60_000,
         toolMode,
-        workspaceRoot
+        workspaceRoot,
+        allowExperimentalPiFeatures: this.settings.piExperimentalFeaturesEnabled
       },
       {
         onAssistantDelta: (delta) => {
@@ -2085,6 +2181,12 @@ function formatPromptContext(label: string, filePath: string, text: string): str
     text,
     "</obsidian-context>"
   ].join("\n");
+}
+
+function formatPiExperimentalFeatureFlag(enabled: boolean): string {
+  return enabled
+    ? "--experimental-pi-features"
+    : "--no-extensions --no-skills --no-prompt-templates --no-context-files";
 }
 
 function formatPiToolFlag(toolMode: "disabled" | "read-only"): string {
@@ -2602,6 +2704,7 @@ function normalizeSettings(
       settings.piPromptTimeoutMinutes
     ),
     piToolMode: settings.piToolMode === "read-only" ? "read-only" : "disabled",
+    piExperimentalFeaturesEnabled: settings.piExperimentalFeaturesEnabled === true,
     safeCommandAllowlist:
       settings.safeCommandAllowlist ?? DEFAULT_SETTINGS.safeCommandAllowlist,
     webFetchAllowedHosts:
@@ -2898,6 +3001,70 @@ function isFuzzyMatch(value: string, query: string): boolean {
   }
 
   return false;
+}
+
+function confirmLocalRisk(
+  app: App,
+  title: string,
+  message: string
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    new ConfirmationModal(app, title, message, resolve).open();
+  });
+}
+
+class ConfirmationModal extends Modal {
+  private readonly onResolve: (confirmed: boolean) => void;
+  private readonly message: string;
+  private readonly titleText: string;
+  private resolved = false;
+
+  constructor(
+    app: App,
+    title: string,
+    message: string,
+    onResolve: (confirmed: boolean) => void
+  ) {
+    super(app);
+    this.titleText = title;
+    this.message = message;
+    this.onResolve = onResolve;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: this.titleText });
+
+    for (const paragraph of this.message.split(/\n\n+/)) {
+      contentEl.createEl("p", { text: paragraph });
+    }
+
+    const actionsEl = contentEl.createDiv({
+      cls: "agent-dashboard__export-actions"
+    });
+    new ButtonComponent(actionsEl)
+      .setButtonText("Cancel")
+      .onClick(() => this.finish(false));
+    new ButtonComponent(actionsEl)
+      .setButtonText("Continue")
+      .setCta()
+      .onClick(() => this.finish(true));
+  }
+
+  onClose(): void {
+    this.finish(false);
+  }
+
+  private finish(confirmed: boolean): void {
+    if (this.resolved) {
+      return;
+    }
+
+    this.resolved = true;
+    this.onResolve(confirmed);
+    this.close();
+  }
 }
 
 function getErrorMessage(error: unknown): string {

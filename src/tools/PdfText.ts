@@ -6,7 +6,10 @@ export interface PdfTextExtractionResult {
   warning?: string;
 }
 
-const MAX_STREAMS = 600;
+const MAX_STREAMS = 150;
+const MAX_COMPRESSED_STREAM_BYTES = 2 * 1024 * 1024;
+const MAX_DECODED_STREAM_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_DECODED_BYTES = 8 * 1024 * 1024;
 
 export function extractPdfText(
   data: ArrayBuffer,
@@ -16,6 +19,7 @@ export function extractPdfText(
   const source = bytes.toString("latin1");
   const chunks: string[] = [];
   let streamCount = 0;
+  let decodedByteCount = 0;
 
   for (const match of source.matchAll(/<<(?:.|\r|\n){0,4000}?>>\s*stream\r?\n?([\s\S]*?)\r?\n?endstream/g)) {
     if (streamCount >= MAX_STREAMS || getTextLength(chunks) >= maxChars) {
@@ -25,11 +29,17 @@ export function extractPdfText(
     streamCount += 1;
     const dictionary = match[0].slice(0, match[0].indexOf("stream"));
     const streamBytes = Buffer.from(match[1], "latin1");
-    const decoded = decodePdfStream(dictionary, streamBytes);
+    const remainingDecodedBytes = MAX_TOTAL_DECODED_BYTES - decodedByteCount;
+    if (remainingDecodedBytes <= 0) {
+      break;
+    }
+
+    const decoded = decodePdfStream(dictionary, streamBytes, remainingDecodedBytes);
     if (!decoded) {
       continue;
     }
 
+    decodedByteCount += decoded.length;
     const text = extractTextFromContentStream(decoded.toString("latin1"));
     if (text) {
       chunks.push(text);
@@ -37,7 +47,7 @@ export function extractPdfText(
   }
 
   if (chunks.length === 0) {
-    const fallbackText = extractTextFromContentStream(source);
+    const fallbackText = extractTextFromContentStream(source.slice(0, MAX_TOTAL_DECODED_BYTES));
     if (fallbackText) {
       chunks.push(fallbackText);
     }
@@ -63,10 +73,23 @@ export function extractPdfText(
   };
 }
 
-function decodePdfStream(dictionary: string, streamBytes: Buffer): Buffer | undefined {
+function decodePdfStream(
+  dictionary: string,
+  streamBytes: Buffer,
+  remainingDecodedBytes: number
+): Buffer | undefined {
+  if (streamBytes.length > MAX_COMPRESSED_STREAM_BYTES) {
+    return undefined;
+  }
+
+  const maxOutputLength = Math.min(
+    MAX_DECODED_STREAM_BYTES,
+    remainingDecodedBytes
+  );
+
   if (/\/FlateDecode\b/.test(dictionary)) {
     try {
-      return inflateSync(trimStreamLineEndings(streamBytes));
+      return inflateSync(trimStreamLineEndings(streamBytes), { maxOutputLength });
     } catch {
       return undefined;
     }
@@ -76,7 +99,12 @@ function decodePdfStream(dictionary: string, streamBytes: Buffer): Buffer | unde
     return undefined;
   }
 
-  return trimStreamLineEndings(streamBytes);
+  const trimmed = trimStreamLineEndings(streamBytes);
+  if (trimmed.length > maxOutputLength) {
+    return undefined;
+  }
+
+  return trimmed;
 }
 
 function trimStreamLineEndings(value: Buffer): Buffer {

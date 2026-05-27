@@ -275,6 +275,11 @@ function renderSafetyStatusItems(
   renderStatusItem(containerEl, "Pi tools", describePiToolMode(plugin.settings.piToolMode));
   renderStatusItem(
     containerEl,
+    "Pi extras",
+    plugin.settings.piExperimentalFeaturesEnabled ? "experimental" : "disabled"
+  );
+  renderStatusItem(
+    containerEl,
     "Timeout",
     `${plugin.settings.piPromptTimeoutMinutes} min`
   );

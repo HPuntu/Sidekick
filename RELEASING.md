@@ -1,6 +1,6 @@
 # Releasing
 
-This project uses source-first git history and GitHub releases for Obsidian install artifacts.
+This project uses source-first git history and GitHub releases for Obsidian install artifacts. Development happens on `dev`; public version promotion happens only when `main` is pushed.
 
 ## Names
 
@@ -10,13 +10,23 @@ This project uses source-first git history and GitHub releases for Obsidian inst
 
 The repo name can include `obsidian` because it helps people find the project on GitHub. The plugin id does not include `obsidian`, and the display name avoids it, because Obsidian's community plugin guidelines discourage using the app name in plugin metadata.
 
+## Branch Model
+
+- `dev`: normal development branch. Pushes run CI health checks only.
+- Pull requests into `main`: run CI health checks.
+- `main`: release branch. Every human push to `main` runs the promotion workflow, bumps the version, updates `CHANGELOG.md`, builds, packages, tags, and publishes a GitHub release if checks pass.
+
+The release workflow skips commits whose message starts with `Release ` so the version-bump commit it creates does not promote itself again. GitHub's default token also prevents most recursive workflow triggers, but the skip guard is kept for clarity.
+
 ## Versioning
 
 Use SemVer-compatible versions in `x.y.z` format. Obsidian requires this format for community plugin releases.
 
-- Patch, for example `0.1.1`: bug fixes, docs, safety guard tightening, small UI polish.
-- Minor, for example `0.2.0`: new user-facing capabilities that preserve existing workflows.
-- Major, for example `1.0.0`: stable public contract or breaking changes after a `1.x` release exists.
+The main-branch promotion workflow chooses the bump from merged commit messages:
+
+- Major: commit body/subject contains `BREAKING CHANGE`, `[major]`, or `#major`.
+- Minor: commit body/subject contains `[minor]`, `#minor`, or a Conventional Commit `feat:`/`feat(scope):` subject.
+- Patch: default for everything else.
 
 Do not use `v0.1.0` tags for Obsidian releases. The GitHub release tag must exactly match the `version` in `manifest.json`, such as `0.1.0`.
 
@@ -24,8 +34,9 @@ Do not use `v0.1.0` tags for Obsidian releases. The GitHub release tag must exac
 
 While the plugin is alpha:
 
+- Merge small, tested changes from `dev` to `main` when you want a public release.
 - Patch releases can ship as needed after a fresh-vault QA pass.
-- Batch feature work into minor releases roughly every 2-4 weeks.
+- Batch larger feature work into minor releases roughly every 2-4 weeks.
 - Keep safety-sensitive changes in small releases with clear changelog entries.
 
 Before a broad public or Community Plugin release:
@@ -34,60 +45,52 @@ Before a broad public or Community Plugin release:
 - Test in a copied vault and a fresh vault.
 - Keep the release marked alpha or beta until external users have tested it.
 
-## Local Release Flow
+## Automatic Release Flow
 
-1. Make and test changes.
-2. Choose the next version:
+1. Do development work on `dev`.
+2. Push `dev`; CI runs health checks.
+3. Open a PR from `dev` to `main`; CI runs again.
+4. Merge to `main` and push `main`.
+5. `.github/workflows/promote-release.yml` runs automatically.
+6. If checks pass, the workflow commits the version/changelog update, tags the exact version, and publishes release assets.
 
-```bash
-npm version patch --no-git-tag-version
-```
+Release assets are:
 
-Use `minor` or `major` instead of `patch` when appropriate.
+- `main.js`
+- `manifest.json`
+- `styles.css`
+- `dist/obsidian-sidekick-<version>.zip`
 
-3. Sync metadata and build:
+## GitHub Repository Setup
+
+Before relying on automatic promotion:
+
+- In GitHub, set Actions workflow permissions to read and write so the promotion workflow can commit version files, push the tag, and create the release.
+- If `main` is branch-protected, allow the release workflow or `github-actions[bot]` to push the generated `Release <version>` commit and tag, or use a release environment/approval flow that permits that push.
+- Keep normal development on `dev`; treat direct human pushes to `main` as release actions.
+
+## Local Dry Run
+
+Before merging to `main`, you can run:
 
 ```bash
 npm run release:check
-```
-
-4. Package release assets:
-
-```bash
 npm run release:zip
 ```
 
-5. Review the diff and commit:
+This builds and packages locally without changing versions.
 
-```bash
-git status
-git add package.json package-lock.json manifest.json versions.json CHANGELOG.md README.md SECURITY.md RELEASE_CHECKLIST.md RELEASING.md scripts .github
-git commit -m "Prepare 0.1.1 release"
-```
+## Manual Emergency Release
 
-6. Create a tag that exactly matches `manifest.json`:
+If GitHub Actions is unavailable:
 
-```bash
-git tag 0.1.1
-git push origin main
-git push origin 0.1.1
-```
-
-The GitHub Actions release workflow builds the plugin and creates a GitHub release for the tag.
-
-## Manual GitHub Release Flow
-
-If you do not use GitHub Actions:
-
-1. Run `npm run release:zip`.
-2. Create a GitHub release whose tag exactly matches `manifest.json`'s version.
-3. Upload these assets:
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`
-   - `dist/obsidian-sidekick-<version>.zip`
-
-Obsidian installs `main.js`, `manifest.json`, and `styles.css` from the GitHub release.
+1. Choose the next version with `npm version patch --no-git-tag-version` or use `minor`/`major`.
+2. Run `npm run sync:version`.
+3. Update `CHANGELOG.md`.
+4. Run `npm run release:check && npm run package`.
+5. Commit `package.json`, `package-lock.json`, `manifest.json`, `versions.json`, and `CHANGELOG.md`.
+6. Tag the release with the exact manifest version.
+7. Upload `main.js`, `manifest.json`, `styles.css`, and the zip to the GitHub release.
 
 ## Generated Files
 

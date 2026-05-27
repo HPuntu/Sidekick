@@ -7,6 +7,7 @@ export interface AgentDashboardSettings {
   allowedExternalWorkspaceRoots: string;
   autoStartBridge: boolean;
   piToolMode: "disabled" | "read-only";
+  piExperimentalFeaturesEnabled: boolean;
   piPromptTimeoutMinutes: number;
   piExecutablePath: string;
   selectedPiModel: string;
@@ -24,6 +25,7 @@ export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   allowedExternalWorkspaceRoots: "",
   autoStartBridge: true,
   piToolMode: "disabled",
+  piExperimentalFeaturesEnabled: false,
   piPromptTimeoutMinutes: 10,
   piExecutablePath: "pi",
   selectedPiModel: "",
@@ -33,9 +35,7 @@ export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   permissionMode: "ask",
   safeCommandAllowlist: [
     "git status",
-    "git diff",
-    "npm run typecheck",
-    "npm run build"
+    "git diff --stat"
   ].join("\n"),
   webFetchAllowedHosts: "",
   webFetchEnabled: false
@@ -109,7 +109,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Pi executable")
-      .setDesc("Command or absolute path used later by the local bridge.")
+      .setDesc("Command or absolute path used by Pi. Non-default paths are confirmed per Obsidian session because vault plugin data can be untrusted.")
       .addText((text) =>
         text
           .setPlaceholder("pi")
@@ -201,11 +201,11 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Safe command allowlist")
       .setDesc(
-        "Exact commands the plugin may run with @cmd(...). Commands run without a shell from the vault root."
+        "Exact commands the plugin may run with @cmd(...). Commands run without a shell from the vault root. Keep this short; npm scripts are intentionally not included by default."
       )
       .addTextArea((text) =>
         text
-          .setPlaceholder("git status\nnpm run typecheck")
+          .setPlaceholder("git status\ngit diff --stat")
           .setValue(this.plugin.settings.safeCommandAllowlist)
           .onChange(async (value) => {
             this.plugin.settings.safeCommandAllowlist = value;
@@ -216,7 +216,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Web fetch")
       .setDesc(
-        "Allow @url(...) prompt context. Local/private hosts are blocked; optional hosts below can narrow access further."
+        "Allow @url(...) prompt context. Requires HTTPS and an explicit host allowlist; DNS results resolving to private/local/metadata IP ranges are blocked."
       )
       .addToggle((toggle) =>
         toggle
@@ -231,7 +231,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Web fetch allowed hosts")
       .setDesc(
-        "Optional host allowlist, one per line. Leave empty to allow public HTTP/HTTPS hosts when web fetch is enabled."
+        "Required host allowlist, one per line. HTTPS only. Examples: arxiv.org, github.com."
       )
       .addTextArea((text) =>
         text
@@ -240,6 +240,24 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.webFetchAllowedHosts = value;
             await this.plugin.saveSettings();
+          })
+      );
+
+
+    containerEl.createEl("h3", { text: "Experimental" });
+
+    new Setting(containerEl)
+      .setName("Allow Pi extensions, skills, prompt templates, and context files")
+      .setDesc(
+        "Experimental and disabled by default. When enabled, Local Sidekick stops passing Pi flags that disable extensions, skills, prompt templates, and context files. Enable only if you trust your Pi configuration and understand the extra context/tools Pi may load."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.piExperimentalFeaturesEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.piExperimentalFeaturesEnabled = value;
+            await this.plugin.saveSettings();
+            this.plugin.refreshDashboardViews();
           })
       );
 

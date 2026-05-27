@@ -20,7 +20,7 @@ Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar 
   - `@vault-index` for filenames and top headings.
   - `@links` or `@links(query)` for conservative internal link suggestions.
   - `@cmd(command)` for exact allowlisted local commands.
-  - `@url(url)` for optional public web fetch context.
+  - `@url(url)` for optional HTTPS web fetch context from explicitly allowlisted hosts.
 - Reviewed Markdown edit proposals with visible diffs and approval before write.
 - Chat export to Markdown, defaulting to a `Chats/` folder in the vault.
 - Obsidian command palette actions for opening the sidebar, exporting chats, checking Pi/Ollama, and suggesting internal links.
@@ -117,15 +117,32 @@ Local Sidekick is built around conservative defaults.
 - Pi `bash`, edit, and write tools are not enabled by the plugin.
 - Shell execution is not generally available.
 - `@cmd(...)` only runs exact commands listed in the safe command allowlist.
-- Safe commands run without a shell and from the vault root.
+- The default safe command allowlist is intentionally narrow: `git status` and `git diff --stat`.
+- Safe commands run without a shell and from the vault root. Avoid adding package-manager scripts unless you trust the vault/repo.
 - File writes require reviewed Markdown edit proposals and user approval.
 - Deletes are blocked.
 - Writes outside the vault are blocked.
 - URL fetching is disabled by default.
-- `@url(...)` blocks localhost and private network hosts.
+- `@url(...)` requires HTTPS, requires an explicit host allowlist, and blocks localhost/private/link-local/metadata IP ranges after DNS resolution.
 - External workspace roots are opt-in and read-only.
 
 These guardrails reduce risk, but they do not make local agent workflows risk-free. Local models can hallucinate, misunderstand paths, or propose incorrect edits. Review diffs before approving them.
+
+## Local Data And Sync
+
+Local Sidekick stores settings, chat history, proposed edits, approvals, and session metadata in the plugin's Obsidian data file inside the vault configuration. That data is local to your vault, but it may be copied by Obsidian Sync, iCloud, Dropbox, Git, or any other sync/backup tool that includes your `.obsidian` folder.
+
+Treat `.obsidian/plugins/local-sidekick/data.json` as private vault data. It may contain prompts, model replies, note excerpts, proposed file contents, and local settings. Do not publish or share it accidentally.
+
+Because vault plugin data can be imported from someone else, Local Sidekick asks for per-session confirmation before using a non-default Pi executable path or before launching Pi with experimental extensions, skills, prompt templates, and context files enabled. Keep `Pi executable` set to `pi` and experimental Pi features disabled unless you intentionally trust the configured behavior.
+
+## Experimental Pi Features
+
+By default, Local Sidekick starts Pi with extensions, skills, prompt templates, and context files disabled for prompt runs. This keeps the plugin's behavior narrow and makes vault context explicit.
+
+Advanced users can enable `Allow Pi extensions, skills, prompt templates, and context files` under the `Experimental` settings section. When enabled, Local Sidekick stops passing the Pi flags that disable those features, so Pi may load whatever your Pi configuration, extensions, skills, prompt templates, or context files define. This path is not the default because it has not been fully tested with Local Sidekick's safety model and may add extra tools or context outside the plugin's own UI.
+
+Pi tools are separate. They remain disabled by default. The only supported Pi tool mode in the plugin UI is the read-only tool allowlist: `read`, `grep`, `find`, and `ls`. Broader Pi tool use is intentionally not exposed yet.
 
 ## PDF Support
 
@@ -137,6 +154,7 @@ Limitations:
 - Scanned PDFs may produce no text.
 - Encrypted or unusual PDFs may fail extraction.
 - Very large PDFs are skipped.
+- Compressed and decompressed PDF streams have stricter per-stream and total limits to reduce UI freezes from malicious or unusual PDFs.
 - Extracted text is capped before it is sent to the model.
 
 When PDF extraction fails, the plugin should tell the model that content was unavailable rather than letting it infer details from the filename.
@@ -154,7 +172,7 @@ Suggested links are rendered as reviewed diffs. They are not applied automatical
 - Some Ollama models do not support tools.
 - Pi behavior depends on the installed Pi version and local configuration.
 - PDF extraction is not a full PDF parser and does not perform OCR.
-- Web fetch is intentionally limited and disabled by default.
+- Web fetch is intentionally limited, disabled by default, HTTPS-only, and requires an explicit host allowlist.
 - The reviewed edit path currently targets Markdown files.
 - There is no automated end-to-end test suite yet.
 - Public release metadata still needs maintainer-specific details before a Community Plugin submission.

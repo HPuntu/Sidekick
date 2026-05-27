@@ -150,8 +150,11 @@ export class BridgeService {
     return probePiExecutable(executablePath);
   }
 
-  discoverPiRpc(executablePath: string): Promise<PiRpcDiscoverySnapshot> {
-    return discoverPiRpc(executablePath);
+  discoverPiRpc(
+    executablePath: string,
+    allowExperimentalPiFeatures = false
+  ): Promise<PiRpcDiscoverySnapshot> {
+    return discoverPiRpc(executablePath, 4000, allowExperimentalPiFeatures);
   }
 
   private handleRequest(

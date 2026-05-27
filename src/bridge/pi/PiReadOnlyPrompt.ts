@@ -10,6 +10,7 @@ export interface PiReadOnlyPromptOptions {
   timeoutMs?: number;
   toolMode?: "disabled" | "read-only";
   workspaceRoot?: string;
+  allowExperimentalPiFeatures?: boolean;
 }
 
 export interface PiReadOnlyPromptCallbacks {
@@ -77,7 +78,8 @@ export class PiReadOnlyPromptRun {
       sessionPath: options.sessionPath ?? "",
       timeoutMs: options.timeoutMs ?? 600000,
       toolMode: options.toolMode ?? "disabled",
-      workspaceRoot: options.workspaceRoot ?? ""
+      workspaceRoot: options.workspaceRoot ?? "",
+      allowExperimentalPiFeatures: options.allowExperimentalPiFeatures === true
     };
     this.callbacks = callbacks;
   }
@@ -398,7 +400,8 @@ export function setPiRpcModel(
   executablePath: string,
   sessionPath: string | undefined,
   modelLabel: string,
-  timeoutMs = 5000
+  timeoutMs = 5000,
+  allowExperimentalPiFeatures = false
 ): Promise<PiSetModelResult> {
   const normalizedPath = executablePath.trim() || "pi";
   const validationError = validateExecutablePath(normalizedPath);
@@ -421,6 +424,7 @@ export function setPiRpcModel(
 
   return new Promise((resolve) => {
     const args = buildReadOnlyArgs({
+      allowExperimentalPiFeatures,
       executablePath: normalizedPath,
       modelLabel: "",
       prompt: "",
@@ -566,7 +570,9 @@ function buildReadOnlyArgs(options: Required<PiReadOnlyPromptOptions>): string[]
     args.push("--no-tools");
   }
 
-  args.push("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files");
+  if (!options.allowExperimentalPiFeatures) {
+    args.push("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files");
+  }
 
   if (options.modelLabel) {
     args.push("--model", options.modelLabel);
