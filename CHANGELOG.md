@@ -1,3 +1,7 @@
+## 0.1.7 - 2026-05-27
+
+- Revise README for clarity on Local Sidekick features (e1f0533)
+
 ## 0.1.6 - 2026-05-27
 
 - Reduce runtime filesystem access warning (d7b28b4)
