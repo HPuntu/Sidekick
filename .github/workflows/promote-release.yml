@@ -46,7 +46,8 @@ jobs:
 
       - name: Bump version
         run: |
-          npm version "${{ steps.bump.outputs.type }}" --no-git-tag-version
+          NEXT_VERSION=$(node scripts/next-release-version.mjs "${{ steps.bump.outputs.type }}")
+          npm version "${NEXT_VERSION}" --no-git-tag-version
           npm run sync:version
 
       - name: Update changelog
@@ -74,6 +75,10 @@ jobs:
           VERSION=$(node -p "require('./manifest.json').version")
           git add package.json package-lock.json manifest.json versions.json CHANGELOG.md
           git commit -m "Release ${VERSION}"
+          if git rev-parse --verify --quiet "refs/tags/${VERSION}"; then
+            echo "Tag ${VERSION} already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
           git tag "${VERSION}"
 
       - name: Push commit and tag

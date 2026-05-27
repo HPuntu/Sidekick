@@ -6,9 +6,37 @@ const versions = JSON.parse(await readFile("versions.json", "utf8"));
 
 const version = packageJson.version;
 
+function parseVersion(value) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value || "");
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function compareVersions(a, b) {
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) {
+      return a[i] - b[i];
+    }
+  }
+  return 0;
+}
+
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
   throw new Error(
     `Obsidian plugin versions must use x.y.z format. Received: ${version}`
+  );
+}
+
+const packageVersion = parseVersion(version);
+const manifestVersion = parseVersion(manifest.version);
+
+if (
+  manifestVersion &&
+  packageVersion &&
+  compareVersions(packageVersion, manifestVersion) < 0 &&
+  process.env.ALLOW_VERSION_DOWNGRADE !== "1"
+) {
+  throw new Error(
+    `Refusing to sync package.json version ${version} over newer manifest.json version ${manifest.version}. Update package.json first, or set ALLOW_VERSION_DOWNGRADE=1 if this is intentional.`
   );
 }
 
