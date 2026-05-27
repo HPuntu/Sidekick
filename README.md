@@ -1,11 +1,11 @@
 # Local Sidekick
 
-A light Obsidian plugin I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar in Obsidian via Ollama and the Pi agent harness. In other words, turning Obsidian into an ideaspace IDE.
+A light Obsidian plugin I got Codex to build for me so I could use local LLM agents through a simple interactive chat sidebar in Obsidian via Ollama and the Pi agent harness. 
 
-DISCLAIMER: I am not a javascript/node developer. This is a vibe-coded project with human oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has relevant experience or suggestions for improvements, I'd be happy to hear from you. I know that one or two similar agent plugins exist, but I wanted one specifically designed for local agents as a lightweight sidebar chat rather than a full dashboard.
+DISCLAIMER: I am not a javascript/node developer. This is a vibe-coded project with human oversight prioritising safe, conservative agent capabilities and simplicity. If anyone has relevant experience or suggestions for improvements, I'd be happy to hear from you. I know that one or two similar agent plugins exist, but I wanted one specifically designed for local agents as a lightweight sidebar chat rather than a full dashboard or ACP generalist.
 
 ## About
-Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, tool usage, reviewed edits, and explicit safety boundaries.
+Local Sidekick is a privacy-first local LLM sidebar for Obsidian, designed for Pi and Ollama users who want vault-aware chat, explicit note context, conservative reviewed edits, with explicit safety boundaries and local-only workflows.
 
 ![light_mode](images/light_mode_2.png)
 Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark and light mode. It can be launched from the command palette or from the small AI agent icon on the left toolbar. Doing so will open the interactive dashboard as a tab in the right hand sidebar. An agent status panel at the top of the sidebar gives real time information on the local models being used alongside interactive buttons to find local models. Below a new chat can be started from an interactive prompt box with model selection or a recent chat from session history continued.
