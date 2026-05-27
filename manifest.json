@@ -1,7 +1,7 @@
 {
   "id": "local-sidekick",
   "name": "Local Sidekick",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minAppVersion": "1.5.0",
   "description": "A local Pi and Ollama agent sidebar for Obsidian vaults.",
   "author": "HPuntu",
