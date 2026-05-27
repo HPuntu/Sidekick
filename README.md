@@ -5,7 +5,7 @@ DISCLAIMER: I am not a javascript/node developer. This is a vibe-coded project w
 # About
 Local Sidekick is an Obsidian plugin that adds a local-first agent chat sidebar for working beside your notes. It is designed around local Ollama models through Pi, with vault-aware context, conservative file linking, tool usage, reviewed edits, and explicit safety boundaries.
 
-![light_mode](images/light_mode.png)
+![light_mode](images/light_mode_2.png)
 Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark and light mode. It can be launched from the command palette or from the small AI agent icon on the left toolbar. Doing so will open the interactive dashboard as a tab in the right hand sidebar. An agent status panel at the top of the sidebar gives real time information on the local models being used alongside interactive buttons to find local models. Below a new chat can be started from an interactive prompt box with model selection or a recent chat from session history continued.
 
 ## Features
