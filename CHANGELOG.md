@@ -1,3 +1,7 @@
+## 0.1.9 - 2026-05-29
+
+- readme update (185e175)
+
 ## 0.1.8 - 2026-05-29
 
 - fixed issues with tool usage cards not showing text (1460bc0)
