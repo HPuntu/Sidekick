@@ -228,9 +228,7 @@ Limitations:
 When PDF extraction fails, the plugin should tell the model that content was unavailable rather than letting it infer details from the filename.
 
 ## Internal Link Suggestions
-The internal link tool is intentionally conservative. It builds candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and proposes links only when meaningful visible terms appear in the current note.
-
-Suggested links are rendered as reviewed diffs. They are not applied automatically.
+Sidekick includes a plugin-native internal link suggester, available from the command palette or with `@links`, that proposes connections between notes without requiring Pi tool support. It builds conservative candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and shows reviewed diffs before any note is changed.
 
 ## Known Limitations
 - This is alpha software.

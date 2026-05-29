@@ -1,8 +1,26 @@
+# Changelog
+
+## Unreleased
+
 ## 0.1.8 - 2026-05-29
 
-- fixed issues with tool usage cards not showing text (1460bc0)
-- tool use cards in chat now expandable (b3998f7)
-- Agent profile configuration by vault files added (ed82fad)
+### Added
+
+- Add vault-native Sidekick `.agent.md` profiles with selectable model lists, disabled/read-only tool preferences, included memory files, `/agent` prompt selection, and starter research/writing/code/linking/glossary agents.
+- Add generated `Sidekick/Prompts/*.prompt.md` prompt library starter files.
+- Add `Sidekick/Memory/project-index.md` generation from Markdown filenames and top headings.
+- Add explicit `.pi/` resource export for Sidekick prompt templates and vault-linker/glossary-curator skills.
+- Add persistent sidebar controls for Sidekick agent profiles alongside the model rail.
+
+### Changed
+
+- Prepare Pi session folders through the Obsidian vault adapter instead of runtime Node fs access.
+- Clarify shell execution, Pi launch, safe command allowlist, and vault enumeration boundaries in public docs.
+
+### Fixed
+
+- Collapse tool-use events by default behind expandable `Tool used: <tool>` cards in the chat stream.
+- Fix tool-use cards so expanded content can show message, input, output, or raw event details.
 
 ## 0.1.7 - 2026-05-27
 
@@ -11,17 +29,6 @@
 ## 0.1.6 - 2026-05-27
 
 - Reduce runtime filesystem access warning (d7b28b4)
-
-## Unreleased
-
-- Collapse tool-use events by default behind expandable `Tool used: <tool>` cards in the chat stream.
-- Add vault-native Sidekick `.agent.md` profiles with selectable model lists, disabled/read-only tool preferences, included memory files, `/agent` prompt selection, and starter research/writing/code/linking/glossary agents.
-- Add generated `Sidekick/Prompts/*.prompt.md` prompt library starter files.
-- Add `Sidekick/Memory/project-index.md` generation from Markdown filenames and top headings.
-- Add explicit `.pi/` resource export for Sidekick prompt templates and vault-linker/glossary-curator skills.
-- Add persistent sidebar controls for Sidekick agent profiles alongside the model rail.
-- Prepare Pi session folders through the Obsidian vault adapter instead of runtime Node fs access.
-- Clarify shell execution, Pi launch, safe command allowlist, and vault enumeration boundaries in public docs.
 
 ## 0.1.5 - 2026-05-27
 
@@ -59,8 +66,6 @@
 - made the status view panel smaller (2bc507f)
 - added full session history, agent selection and Pi agent RCPa (c6eae36)
 - initial commit (38b3bd8)
-
-# Changelog
 
 ## 0.1.0
 
