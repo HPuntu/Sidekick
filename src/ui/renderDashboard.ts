@@ -23,6 +23,7 @@ const STATUS_PANEL_MIN_HEIGHT = 96;
 const STATUS_PANEL_MAX_HEIGHT = 420;
 const AGENT_PANEL_MIN_HEIGHT = 220;
 const PANEL_RESIZE_KEY_STEP = 16;
+const openToolEventIds = new Set<string>();
 
 export function renderDashboardShell(
   plugin: AgentDashboardPlugin,
@@ -1469,24 +1470,72 @@ function renderToolEvent(
   event: AgentEvent
 ): void {
   const tool = event.tool ?? inferToolEvent(event.text);
-  const cardEl = containerEl.createEl("details", {
+  const cardEl = containerEl.createDiv({
     cls: `agent-dashboard__tool-card agent-dashboard__tool-card--${tool.status}`
   });
-  const summaryEl = cardEl.createEl("summary", {
+  cardEl.style.display = "block";
+  cardEl.style.minHeight = "42px";
+  cardEl.style.overflow = "hidden";
+
+  const bodyId = `agent-dashboard-tool-${event.id}`;
+  const headerEl = cardEl.createDiv({
+    attr: {
+      "aria-controls": bodyId,
+      "aria-expanded": "false",
+      role: "button",
+      tabindex: "0"
+    },
     cls: "agent-dashboard__tool-header"
   });
-  const titleEl = summaryEl.createDiv({
+  headerEl.style.alignItems = "center";
+  headerEl.style.cursor = "pointer";
+  headerEl.style.display = "grid";
+  headerEl.style.gap = "8px";
+  headerEl.style.gridTemplateColumns = "auto minmax(0, 1fr) auto";
+  headerEl.style.minHeight = "40px";
+  headerEl.style.padding = "8px";
+  headerEl.style.width = "100%";
+
+  const disclosureEl = headerEl.createSpan({
+    attr: { "aria-hidden": "true" },
+    cls: "agent-dashboard__tool-disclosure"
+  });
+  disclosureEl.setText("▸");
+  disclosureEl.style.color = "var(--agent-dashboard-muted)";
+  disclosureEl.style.display = "inline-block";
+  disclosureEl.style.width = "10px";
+
+  const titleEl = headerEl.createSpan({
     cls: "agent-dashboard__tool-title"
   });
+  titleEl.style.alignItems = "center";
+  titleEl.style.color = "var(--text-normal)";
+  titleEl.style.display = "inline-flex";
+  titleEl.style.fontSize = "var(--font-ui-small)";
+  titleEl.style.fontWeight = "600";
+  titleEl.style.gap = "6px";
+  titleEl.style.minWidth = "0";
+  titleEl.style.overflow = "hidden";
+  titleEl.style.textOverflow = "ellipsis";
+  titleEl.style.whiteSpace = "nowrap";
   const iconEl = titleEl.createSpan({
     cls: "agent-dashboard__tool-icon"
   });
   setIcon(iconEl, getToolStatusIcon(tool));
-  titleEl.createSpan({ text: `Tool used: ${getToolDisplayName(tool)}` });
+  const labelEl = titleEl.createSpan({
+    cls: "agent-dashboard__tool-label",
+    text: `Tool used: ${getToolDisplayName(tool)}`
+  });
+  labelEl.style.minWidth = "0";
+  labelEl.style.overflow = "hidden";
+  labelEl.style.textOverflow = "ellipsis";
 
-  const summaryMetaEl = summaryEl.createSpan({
+  const summaryMetaEl = headerEl.createSpan({
     cls: "agent-dashboard__tool-summary-meta"
   });
+  summaryMetaEl.style.display = "inline-flex";
+  summaryMetaEl.style.gap = "8px";
+  summaryMetaEl.style.whiteSpace = "nowrap";
   summaryMetaEl.createSpan({
     cls: "agent-dashboard__tool-status",
     text: tool.status
@@ -1497,8 +1546,39 @@ function renderToolEvent(
   });
 
   const bodyEl = cardEl.createDiv({
+    attr: { id: bodyId },
     cls: "agent-dashboard__tool-content"
   });
+  const setOpen = (nextOpen: boolean) => {
+    cardEl.toggleClass("is-open", nextOpen);
+    disclosureEl.setText(nextOpen ? "▾" : "▸");
+    bodyEl.style.display = nextOpen ? "flex" : "none";
+    headerEl.setAttr("aria-expanded", String(nextOpen));
+    if (nextOpen) {
+      openToolEventIds.add(event.id);
+    } else {
+      openToolEventIds.delete(event.id);
+    }
+  };
+  setOpen(openToolEventIds.has(event.id));
+  const toggleOpen = () => setOpen(!cardEl.hasClass("is-open"));
+  cardEl.addEventListener("click", (mouseEvent) => {
+    const target = mouseEvent.target;
+    if (target instanceof HTMLElement && target.closest(".agent-dashboard__tool-content")) {
+      return;
+    }
+
+    toggleOpen();
+  });
+  headerEl.addEventListener("keydown", (keyboardEvent) => {
+    if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") {
+      return;
+    }
+
+    keyboardEvent.preventDefault();
+    toggleOpen();
+  });
+
   const metaItems = [
     tool.title ? `title: ${tool.title}` : "",
     tool.name ? `name: ${tool.name}` : "",
