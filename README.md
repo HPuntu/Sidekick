@@ -36,7 +36,7 @@ Chat session agent reply streams are rendered in markdown with your Obsidian the
 ### Internal Link Suggestions
 Sidekick also includes a plugin-native internal link suggester, available from the command palette or with @links, that proposes connections between notes without requiring Pi tool support. It builds conservative candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and shows reviewed diffs before any note is changed.
 
-### New Agentic Productivity Features Introduced in v0.1.8
+### New Agentic Productivity Features Introduced in v0.1.8
 To better exploit the local-first nature of Sidekick, v0.1.8 introduces a set of features for turning your vault into a persistent source of agent instructions, memory, and workflow configuration.
 - Sidekick can now create a `Sidekick/` folder in the root of your vault, including template `.agent.md` profiles for different use cases.
 - `.agent.md` profiles can specify preferred local models, tool usage preferences, included memory files, and system-style instructions written directly in Markdown.
