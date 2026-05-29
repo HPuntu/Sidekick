@@ -1,3 +1,9 @@
+## 0.1.8 - 2026-05-29
+
+- fixed issues with tool usage cards not showing text (1460bc0)
+- tool use cards in chat now expandable (b3998f7)
+- Agent profile configuration by vault files added (ed82fad)
+
 ## 0.1.7 - 2026-05-27
 
 - Revise README for clarity on Local Sidekick features (e1f0533)
