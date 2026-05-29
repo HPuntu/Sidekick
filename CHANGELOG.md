@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Collapse tool-use events by default behind expandable `Tool used: <tool>` cards in the chat stream.
 - Add vault-native Sidekick `.agent.md` profiles with selectable model lists, disabled/read-only tool preferences, included memory files, `/agent` prompt selection, and starter research/writing/code/linking/glossary agents.
 - Add generated `Sidekick/Prompts/*.prompt.md` prompt library starter files.
 - Add `Sidekick/Memory/project-index.md` generation from Markdown filenames and top headings.

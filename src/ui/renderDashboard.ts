@@ -1428,6 +1428,11 @@ function renderAgentEvent(
     return;
   }
 
+  if (event.kind === "tool") {
+    renderToolEvent(plugin, containerEl, event);
+    return;
+  }
+
   const eventEl = containerEl.createDiv({
     cls: `agent-dashboard__event agent-dashboard__event--${event.kind}`
   });
@@ -1441,12 +1446,6 @@ function renderAgentEvent(
     cls: "agent-dashboard__event-time",
     text: formatEventTime(event.createdAt)
   });
-
-  if (event.kind === "tool") {
-    renderToolEvent(plugin, eventEl, event);
-    renderReferencedFiles(plugin, eventEl, event.text);
-    return;
-  }
 
   const textEl = eventEl.createDiv({
     cls: "agent-dashboard__event-text markdown-rendered"
@@ -1470,47 +1469,59 @@ function renderToolEvent(
   event: AgentEvent
 ): void {
   const tool = event.tool ?? inferToolEvent(event.text);
-  const cardEl = containerEl.createDiv({
+  const cardEl = containerEl.createEl("details", {
     cls: `agent-dashboard__tool-card agent-dashboard__tool-card--${tool.status}`
   });
-  const headerEl = cardEl.createDiv({
+  const summaryEl = cardEl.createEl("summary", {
     cls: "agent-dashboard__tool-header"
   });
-  const titleEl = headerEl.createDiv({
+  const titleEl = summaryEl.createDiv({
     cls: "agent-dashboard__tool-title"
   });
   const iconEl = titleEl.createSpan({
     cls: "agent-dashboard__tool-icon"
   });
   setIcon(iconEl, getToolStatusIcon(tool));
-  titleEl.createSpan({ text: tool.title });
-  headerEl.createSpan({
+  titleEl.createSpan({ text: `Tool used: ${getToolDisplayName(tool)}` });
+
+  const summaryMetaEl = summaryEl.createSpan({
+    cls: "agent-dashboard__tool-summary-meta"
+  });
+  summaryMetaEl.createSpan({
     cls: "agent-dashboard__tool-status",
     text: tool.status
   });
+  summaryMetaEl.createSpan({
+    cls: "agent-dashboard__tool-time",
+    text: formatEventTime(event.createdAt)
+  });
 
+  const bodyEl = cardEl.createDiv({
+    cls: "agent-dashboard__tool-content"
+  });
   const metaItems = [
+    tool.title ? `title: ${tool.title}` : "",
     tool.name ? `name: ${tool.name}` : "",
     tool.callId ? `id: ${tool.callId}` : "",
     tool.eventType ? `event: ${tool.eventType}` : ""
   ].filter(Boolean);
   if (metaItems.length > 0) {
-    cardEl.createDiv({
+    bodyEl.createDiv({
       cls: "agent-dashboard__tool-meta",
       text: metaItems.join(" · ")
     });
   }
 
   if (tool.input !== undefined) {
-    renderToolPayload(cardEl, "Input", tool.input);
+    renderToolPayload(bodyEl, "Input", tool.input);
   }
 
   if (tool.output !== undefined) {
-    renderToolPayload(cardEl, tool.status === "error" ? "Error" : "Output", tool.output);
+    renderToolPayload(bodyEl, tool.status === "error" ? "Error" : "Output", tool.output);
   }
 
   if (tool.input === undefined && tool.output === undefined) {
-    const textEl = cardEl.createDiv({
+    const textEl = bodyEl.createDiv({
       cls: "agent-dashboard__tool-text markdown-rendered"
     });
     void MarkdownRenderer.render(
@@ -1523,6 +1534,12 @@ function renderToolEvent(
       linkInlineReferencedFiles(plugin, textEl);
     });
   }
+
+  renderReferencedFiles(plugin, bodyEl, event.text);
+}
+
+function getToolDisplayName(tool: AgentToolEvent): string {
+  return tool.name || tool.title || tool.eventType || "tool";
 }
 
 function renderToolPayload(
