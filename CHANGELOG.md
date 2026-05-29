@@ -1,3 +1,7 @@
+## 0.1.6 - 2026-05-27
+
+- Reduce runtime filesystem access warning (d7b28b4)
+
 ## Unreleased
 
 - Prepare Pi session folders through the Obsidian vault adapter instead of runtime Node fs access.
