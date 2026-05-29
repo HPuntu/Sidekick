@@ -711,12 +711,11 @@
 }
 
 .agent-dashboard__tool-card {
+  background: var(--background-primary);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  display: block;
+  overflow: hidden;
 }
 
 .agent-dashboard__tool-card--blocked,
@@ -730,9 +729,25 @@
 
 .agent-dashboard__tool-header {
   align-items: center;
+  cursor: pointer;
   display: flex;
   gap: 8px;
   justify-content: space-between;
+  list-style: disclosure-closed;
+  min-width: 0;
+  padding: 8px;
+}
+
+.agent-dashboard__tool-card[open] > .agent-dashboard__tool-header {
+  border-bottom: 1px solid var(--agent-dashboard-border);
+  list-style: disclosure-open;
+}
+
+.agent-dashboard__tool-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
 }
 
 .agent-dashboard__tool-title {
@@ -750,11 +765,26 @@
   width: 14px;
 }
 
+.agent-dashboard__tool-summary-meta {
+  align-items: center;
+  color: var(--agent-dashboard-muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: var(--font-ui-smaller);
+  gap: 8px;
+}
+
 .agent-dashboard__tool-status {
   color: var(--agent-dashboard-muted);
   flex: 0 0 auto;
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
+}
+
+.agent-dashboard__tool-time {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .agent-dashboard__tool-meta,
