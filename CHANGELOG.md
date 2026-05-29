@@ -1,6 +1,10 @@
-# Changelog
+## 0.1.10 - 2026-05-29
 
-## Unreleased
+- readme update (18d7063)
+
+## 0.1.9 - 2026-05-29
+
+- readme update (185e175)
 
 ## 0.1.8 - 2026-05-29
 
