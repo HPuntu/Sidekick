@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 
 import AgentDashboardPlugin from "./main";
+import { DEFAULT_SIDEKICK_ROOT, normalizeSidekickRoot } from "./agent/SidekickProfile";
 
 export interface AgentDashboardSettings {
   agentSessionName: string;
@@ -11,6 +12,8 @@ export interface AgentDashboardSettings {
   piPromptTimeoutMinutes: number;
   piExecutablePath: string;
   selectedPiModel: string;
+  selectedAgentProfilePath: string;
+  sidekickRootFolder: string;
   statusPanelHeight: number;
   ollamaHost: string;
   defaultModel: string;
@@ -30,6 +33,8 @@ export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   piPromptTimeoutMinutes: 10,
   piExecutablePath: "pi",
   selectedPiModel: "",
+  selectedAgentProfilePath: "",
+  sidekickRootFolder: DEFAULT_SIDEKICK_ROOT,
   statusPanelHeight: 160,
   ollamaHost: "http://127.0.0.1:11434",
   defaultModel: "",
@@ -88,6 +93,48 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
             this.plugin.settings.allowedExternalWorkspaceRoots = value;
             await this.plugin.saveSettings();
             this.plugin.refreshDashboardViews();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Sidekick root folder")
+      .setDesc("Vault folder for Sidekick agent profiles and memory files. Agent files live under Sidekick/Agents by default.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SIDEKICK_ROOT)
+          .setValue(this.plugin.settings.sidekickRootFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.sidekickRootFolder = normalizeSidekickRoot(value);
+            await this.plugin.saveSettings();
+            await this.plugin.refreshSidekickProfiles();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Sidekick vault files")
+      .setDesc("Create starter .agent.md profiles and memory files, then refresh the generated project index.")
+      .addButton((button) =>
+        button
+          .setButtonText("Create starters")
+          .onClick(async () => {
+            await this.plugin.createSidekickStarterFiles();
+            this.display();
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Refresh index")
+          .onClick(async () => {
+            await this.plugin.refreshSidekickProjectIndex();
+            this.display();
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Export Pi resources")
+          .onClick(async () => {
+            await this.plugin.exportSidekickPiResources();
+            this.display();
           })
       );
 

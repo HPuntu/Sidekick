@@ -481,6 +481,7 @@ function renderAgentPanel(
         renderDashboardShell(plugin, rootEl, options);
     });
     titleEl.createEl("h4", { text: "Agent" });
+    renderCurrentAgentProfilePill(plugin, titleEl);
     renderCurrentModelPill(plugin, titleEl);
   } else {
     headingEl.createEl("h4", { text: "Sessions" });
@@ -490,6 +491,7 @@ function renderAgentPanel(
     cls: "agent-dashboard__panel-controls"
   });
 
+  renderAgentProfileSelector(plugin, panelEl, rootEl, options);
   renderModelSelector(plugin, panelEl, rootEl, options);
 
   if (plugin.agentViewMode === "history") {
@@ -553,7 +555,7 @@ function renderAgentPanel(
   const promptEl = composerEl.createEl("textarea", {
     cls: "agent-dashboard__prompt-input",
     attr: {
-      placeholder: "Ask the agent...",
+      placeholder: "Ask the agent... Try /agent research-tutor on the first line",
       rows: "3"
     }
   });
@@ -756,7 +758,7 @@ function renderAgentHistoryPage(
   const promptEl = composerEl.createEl("textarea", {
     cls: "agent-dashboard__prompt-input",
     attr: {
-      placeholder: "Start a new chat...",
+      placeholder: "Start a new chat... Try /agent research-tutor on the first line",
       rows: "3"
     }
   });
@@ -1028,13 +1030,99 @@ function getActiveMention(
   };
 }
 
+function renderAgentProfileSelector(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  rootEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const profiles = plugin.getSidekickProfiles();
+  const selectedProfile = plugin.getSelectedSidekickProfile();
+  const selectorEl = containerEl.createDiv({
+    cls: "agent-dashboard__agent-profile-selector"
+  });
+  const rowEl = selectorEl.createDiv({
+    cls: "agent-dashboard__agent-profile-row"
+  });
+  rowEl.createSpan({
+    cls: "agent-dashboard__agent-profile-label",
+    text: "Agent"
+  });
+
+  const selectEl = rowEl.createEl("select", {
+    cls: "agent-dashboard__agent-profile-select"
+  });
+  const noneOption = selectEl.createEl("option", { text: "No profile" });
+  noneOption.value = "";
+  for (const profile of profiles) {
+    const optionEl = selectEl.createEl("option", { text: profile.name });
+    optionEl.value = profile.path;
+  }
+  selectEl.value = selectedProfile?.path ?? "";
+  selectEl.disabled = plugin.agentSessionStatus === "running";
+  selectEl.addEventListener("change", async () => {
+    await plugin.selectSidekickProfile(selectEl.value);
+    renderDashboardShell(plugin, rootEl, options);
+  });
+
+  new ButtonComponent(rowEl)
+    .setButtonText("Refresh")
+    .setTooltip("Reload Sidekick agent profiles")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(async () => {
+      await plugin.refreshSidekickProfiles(true);
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
+  new ButtonComponent(rowEl)
+    .setButtonText("Create")
+    .setTooltip("Create starter Sidekick agent and memory files")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(async () => {
+      await plugin.createSidekickStarterFiles();
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
+  selectorEl.createDiv({
+    cls: "agent-dashboard__agent-profile-meta",
+    text: describeAgentProfileSelection(selectedProfile, profiles.length)
+  });
+}
+
+function describeAgentProfileSelection(
+  profile: ReturnType<AgentDashboardPlugin["getSelectedSidekickProfile"]>,
+  profileCount: number
+): string {
+  if (!profile) {
+    return profileCount > 0
+      ? "Choose a profile or use /agent name as the first line of a prompt."
+      : "Create starter profiles under Sidekick/Agents, or add your own .agent.md files.";
+  }
+
+  const parts = [];
+  if (profile.description) {
+    parts.push(profile.description);
+  }
+  if (profile.modelLabels.length > 0) {
+    parts.push(`${profile.modelLabels.length} model choice${profile.modelLabels.length === 1 ? "" : "s"}`);
+  }
+  if (profile.includePaths.length > 0) {
+    parts.push(`${profile.includePaths.length} include${profile.includePaths.length === 1 ? "" : "s"}`);
+  }
+  if (profile.toolMode) {
+    parts.push(profile.toolMode === "read-only" ? "read-only tools" : "tools disabled");
+  }
+
+  return parts.join(" · ") || profile.path;
+}
+
 function renderModelSelector(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
   rootEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
-  const models = plugin.piRpcDiscoverySnapshot.models;
+  const models = plugin.getSelectablePiModels();
   const selectorEl = containerEl.createDiv({
     cls: "agent-dashboard__model-selector"
   });
@@ -1099,6 +1187,25 @@ function renderModelSelector(
       void plugin.selectPiModel(model.label);
     });
   }
+}
+
+function renderCurrentAgentProfilePill(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement
+): void {
+  const profile = plugin.getSelectedSidekickProfile();
+  if (!profile) {
+    return;
+  }
+
+  const pillEl = containerEl.createSpan({
+    cls: "agent-dashboard__chat-agent-pill"
+  });
+  setIcon(pillEl.createSpan({ cls: "agent-dashboard__chat-agent-pill-icon" }), "sparkles");
+  pillEl.createSpan({
+    cls: "agent-dashboard__chat-agent-pill-label",
+    text: profile.name
+  });
 }
 
 function renderCurrentModelPill(

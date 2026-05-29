@@ -12,6 +12,7 @@ Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark a
 
 ## Features
 - Local model workflow through Pi and Ollama.
+- Vault-native Sidekick agent profiles, prompt library files, and memory files under `Sidekick/`.
 - Persistent chat sessions with a history landing page.
 - Compact model rail with discovered Pi/Ollama models and capability badges.
 - Markdown and math rendering through Obsidian's renderer.
@@ -25,7 +26,9 @@ Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark a
   - `@url(url)` for optional HTTPS web fetch context from explicitly allowlisted hosts.
 - Reviewed Markdown edit proposals with visible diffs and approval before write.
 - Chat export to Markdown, defaulting to a `Chats/` folder in the vault.
-- Obsidian command palette actions for opening the sidebar, exporting chats, checking Pi/Ollama, and suggesting internal links.
+- Starter research tutor, writing editor, code reviewer, vault linker, and glossary curator profiles.
+- Explicit export of Sidekick profiles into Pi prompt templates and skills under `.pi/`.
+- Obsidian command palette actions for opening the sidebar, exporting chats, checking Pi/Ollama, refreshing Sidekick memory files, and suggesting internal links.
 
 ![dark_mode](images/dark_mode.png)
 Chat session agent reply streams are rendered in markdown with your Obsidian theme, handling math and standard formatting. For a full Obsidian IDE experience use the terminal plugin alongside this so you never have to leave Obsidian!
@@ -92,7 +95,7 @@ The sidebar can still be useful without Pi tools. File mentions and local contex
 ## Usage
 Open the command palette and run `Open sidekick`. Local Sidekick opens as a right sidebar so your main note stays visible.
 
-Start a new chat from the session landing page, or select a previous session. Use the model rail at the top to switch models. Use `@` in the composer to attach vault files as context.
+Start a new chat from the session landing page, or select a previous session. Use the agent profile selector to choose a local `.agent.md` profile, then use the model rail at the top to switch among that profile's model choices. Use `@` in the composer to attach vault files as context.
 
 Useful prompt patterns:
 
@@ -112,12 +115,71 @@ Use @links for this note and propose only high-confidence Obsidian links.
 Use @cmd(git status) and tell me whether the vault plugin repo is clean.
 ```
 
+```text
+/agent research-tutor
+Explain @Projects/Example/MAIN.md and quiz me on the key definitions.
+```
+
 When the agent proposes edits, it must use reviewed edit blocks. The plugin renders a diff and requires approval before applying changes.
+
+## Sidekick Agent Profiles And Memory
+Local Sidekick can create a vault-root `Sidekick/` folder for portable agent profiles and durable local memory files:
+
+```text
+Sidekick/
+  Agents/
+    research-tutor.agent.md
+    writing-editor.agent.md
+    code-reviewer.agent.md
+    vault-linker.agent.md
+    glossary-curator.agent.md
+  Prompts/
+    summarize-note.prompt.md
+    research-questions.prompt.md
+    glossary-update.prompt.md
+  Memory/
+    vault-summary.md
+    user-preferences.md
+    project-index.md
+    glossary.md
+```
+
+Create these starter files from Settings, the sidebar `Create` button, or the `Create Sidekick starter files` command. `Sidekick/Prompts/*.prompt.md` files are ordinary Markdown prompt snippets: mention them with `@`, copy from them, or include them from an `.agent.md` profile. Refresh `Sidekick/Memory/project-index.md` with the `Refresh Sidekick project index` command; it is generated from local Markdown filenames and top headings.
+
+A `.agent.md` file uses simple YAML frontmatter plus Markdown instructions:
+
+```markdown
+---
+name: research-tutor
+description: Socratic research helper for careful note-grounded explanations.
+models:
+  - ollama/qwen3-coder:30b
+  - ollama/deepseek-r1:32b
+tools: disabled
+include:
+  - Sidekick/Memory/vault-summary.md
+  - Sidekick/Memory/user-preferences.md
+  - Sidekick/Memory/glossary.md
+---
+
+You are a careful research tutor working inside an Obsidian vault.
+Use only supplied vault context as evidence for claims about the user's notes.
+```
+
+The Markdown body is added to the prompt as system-style guidance. `include` files are read through the Obsidian vault API and added as explicit context. `models` filters the model rail to the profile's preferred choices while still letting the user pick among those local models. `tools` currently supports only `disabled` and `read-only`; broader Pi tools are still not exposed by Local Sidekick.
+
+You can also select a profile inline by making `/agent profile-name` the first line of a prompt. Use `/agent clear` as the first line to clear the current profile.
+
+The `vault-linker` and `glossary-curator` starters formalize the existing internal-link and glossary workflows: they use the generated project index, related-note search, and reviewed edit proposals so link/glossary changes stay conservative and inspectable.
+
+Use `Export Sidekick Pi resources` when you want matching Pi resources outside the Local Sidekick prompt path. This creates or updates `.pi/prompts/*.md`, `.pi/skills/sidekick-vault-linker/SKILL.md`, `.pi/skills/sidekick-glossary-curator/SKILL.md`, and merges `prompts`/`skills` entries into `.pi/settings.json`. This is explicit because `.pi/settings.json` can affect Pi runs started directly from the vault root.
 
 ## Safety
 Local Sidekick is built around conservative defaults.
 
 - The default Pi tool mode is disabled.
+- `.agent.md` files and Sidekick memory files are local vault files that can steer prompt instructions, model choices, and disabled/read-only Pi tool mode. Inspect them before using profiles from an untrusted vault.
+- `Export Sidekick Pi resources` writes `.pi/` project resources only after you invoke it. Inspect generated `.pi/settings.json` if you also run Pi directly in the vault.
 - Read-only Pi tools, when enabled, are limited to `read`, `grep`, `find`, and `ls`.
 - Pi `bash`, edit, and write tools are not enabled by the plugin.
 - The plugin launches the local Pi executable to run the agent. This is necessary for local agent workflows and is why automated review tools may report shell/process execution.
@@ -186,6 +248,10 @@ The plugin registers these Obsidian commands:
 
 - `Open sidekick`
 - `Insert sidekick block`
+- `Refresh Sidekick agent profiles`
+- `Create Sidekick starter files`
+- `Refresh Sidekick project index`
+- `Export Sidekick Pi resources`
 - `Restart sidekick bridge`
 - `Stop sidekick bridge`
 - `Check Ollama status`

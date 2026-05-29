@@ -244,6 +244,52 @@
   margin-bottom: 0;
 }
 
+.agent-dashboard__agent-profile-selector {
+  border: 1px solid var(--agent-dashboard-border);
+  border-radius: 8px;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.agent-dashboard__agent-profile-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-dashboard__agent-profile-label {
+  color: var(--agent-dashboard-muted);
+  flex: 0 0 auto;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+}
+
+.agent-dashboard__agent-profile-select {
+  background: var(--background-primary);
+  border: 1px solid var(--agent-dashboard-border);
+  border-radius: 6px;
+  color: var(--text-normal);
+  flex: 1 1 auto;
+  font-size: var(--font-ui-small);
+  min-width: 0;
+}
+
+.agent-dashboard__agent-profile-row button {
+  height: 24px;
+  padding-inline: 8px;
+}
+
+.agent-dashboard__agent-profile-meta {
+  color: var(--agent-dashboard-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .agent-dashboard__model-selector {
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
@@ -279,6 +325,34 @@
   gap: 5px;
   min-width: 0;
   padding: 2px 7px 2px 4px;
+}
+
+.agent-dashboard__chat-agent-pill {
+  align-items: center;
+  background: var(--background-primary);
+  border: 1px solid var(--agent-dashboard-border);
+  border-radius: 999px;
+  color: var(--text-normal);
+  display: inline-flex;
+  font-size: var(--font-ui-smaller);
+  gap: 4px;
+  max-width: 150px;
+  min-width: 0;
+  padding: 2px 7px 2px 5px;
+}
+
+.agent-dashboard__chat-agent-pill-icon {
+  align-items: center;
+  color: var(--interactive-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.agent-dashboard__chat-agent-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-dashboard__model-current-label {

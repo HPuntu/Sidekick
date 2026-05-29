@@ -39,7 +39,8 @@ import {
 import {
   createCheckingPiRpcDiscoverySnapshot,
   createUnknownPiRpcDiscoverySnapshot,
-  PiRpcDiscoverySnapshot
+  PiRpcDiscoverySnapshot,
+  PiRpcModelSummary
 } from "./bridge/pi/PiRpcDiscovery";
 import {
   PiReadOnlyPromptRun,
@@ -66,6 +67,15 @@ import {
   AgentDashboardSettings,
   DEFAULT_SETTINGS
 } from "./settings";
+import {
+  findSidekickProfile,
+  getSidekickProfileDisplayName,
+  getSidekickProfileSlug,
+  getStarterSidekickFiles,
+  loadSidekickProfiles,
+  normalizeSidekickRoot,
+  SidekickProfile
+} from "./agent/SidekickProfile";
 import {
   AGENT_DASHBOARD_VIEW_TYPE,
   AgentDashboardView
@@ -94,6 +104,9 @@ const MAX_CONTEXT_CHARS = 20000;
 const MAX_DIRECTORY_CONTEXT_ITEMS = 80;
 const MAX_MENTIONED_FILES = 5;
 const MAX_PDF_CONTEXT_BYTES = 50 * 1024 * 1024;
+const MAX_SIDEKICK_PROFILE_INCLUDES = 8;
+const MAX_SIDEKICK_PROJECT_INDEX_FILES = 500;
+const MAX_SIDEKICK_PROJECT_INDEX_HEADINGS_PER_FILE = 8;
 const DEFAULT_CHAT_EXPORT_FOLDER = "Chats";
 const TEXT_CONTEXT_EXTENSIONS = new Set([
   "bib",
@@ -126,6 +139,11 @@ interface MentionedVaultFileReference {
 interface PromptToolDirective {
   kind: "cmd" | "index" | "links" | "search" | "semantic" | "url";
   value: string;
+}
+
+interface PromptSidekickProfileSelection {
+  profile?: SidekickProfile;
+  prompt: string;
 }
 
 export interface AgentSessionHistoryItem {
@@ -212,6 +230,7 @@ export default class AgentDashboardPlugin extends Plugin {
   proposedEdits: ProposedEditRecord[] = [];
   agentSessionHistory: AgentSessionHistoryItem[] = [];
   agentViewMode: AgentDashboardAgentView = "history";
+  sidekickProfiles: SidekickProfile[] = [];
   piSessionId?: string;
   piSessionMessageCount?: number;
   piSessionPath?: string;
@@ -233,6 +252,7 @@ export default class AgentDashboardPlugin extends Plugin {
     this.piRpcDiscoverySnapshot = createUnknownPiRpcDiscoverySnapshot(
       this.settings.piExecutablePath
     );
+    await this.refreshSidekickProfiles();
 
     if (this.settings.autoStartBridge) {
       const snapshot = await this.bridge.start();
@@ -360,6 +380,38 @@ export default class AgentDashboardPlugin extends Plugin {
       name: "Start new persistent agent session",
       callback: () => {
         void this.startNewAgentSession();
+      }
+    });
+
+    this.addCommand({
+      id: "refresh-sidekick-profiles",
+      name: "Refresh Sidekick agent profiles",
+      callback: async () => {
+        await this.refreshSidekickProfiles(true);
+      }
+    });
+
+    this.addCommand({
+      id: "create-sidekick-starter-files",
+      name: "Create Sidekick starter files",
+      callback: async () => {
+        await this.createSidekickStarterFiles();
+      }
+    });
+
+    this.addCommand({
+      id: "refresh-sidekick-project-index",
+      name: "Refresh Sidekick project index",
+      callback: async () => {
+        await this.refreshSidekickProjectIndex();
+      }
+    });
+
+    this.addCommand({
+      id: "export-sidekick-pi-resources",
+      name: "Export Sidekick Pi resources",
+      callback: async () => {
+        await this.exportSidekickPiResources();
       }
     });
 
@@ -539,6 +591,267 @@ export default class AgentDashboardPlugin extends Plugin {
     return parts.join(" · ");
   }
 
+  async refreshSidekickProfiles(showNotice = false): Promise<void> {
+    this.sidekickProfiles = await loadSidekickProfiles(
+      this.app,
+      this.settings.sidekickRootFolder
+    );
+
+    let shouldSaveSettings = false;
+    if (
+      this.settings.selectedAgentProfilePath &&
+      !this.getSelectedSidekickProfile()
+    ) {
+      this.settings.selectedAgentProfilePath = "";
+      shouldSaveSettings = true;
+    }
+
+    const selectedProfile = this.getSelectedSidekickProfile();
+    if (
+      selectedProfile &&
+      selectedProfile.modelLabels.length > 0 &&
+      !selectedProfile.modelLabels.includes(this.settings.selectedPiModel)
+    ) {
+      this.settings.selectedPiModel = selectedProfile.modelLabels[0];
+      shouldSaveSettings = true;
+    }
+
+    if (shouldSaveSettings) {
+      await this.saveSettings();
+    }
+
+    if (showNotice) {
+      new Notice(
+        `Loaded ${this.sidekickProfiles.length} Sidekick agent profile${this.sidekickProfiles.length === 1 ? "" : "s"}.`
+      );
+    }
+
+    this.refreshDashboardViews();
+  }
+
+  getSidekickProfiles(): SidekickProfile[] {
+    return [...this.sidekickProfiles];
+  }
+
+  getSelectedSidekickProfile(): SidekickProfile | undefined {
+    if (!this.settings.selectedAgentProfilePath) {
+      return undefined;
+    }
+
+    return findSidekickProfile(
+      this.sidekickProfiles,
+      this.settings.selectedAgentProfilePath
+    );
+  }
+
+  getSelectablePiModels(): PiRpcModelSummary[] {
+    const profile = this.getSelectedSidekickProfile();
+    const profileModels = profile?.modelLabels ?? [];
+    const discovered = this.piRpcDiscoverySnapshot.models;
+    if (profileModels.length === 0) {
+      return discovered;
+    }
+
+    return profileModels.map((label) =>
+      discovered.find((model) => model.label === label) ?? { label }
+    );
+  }
+
+  async selectSidekickProfile(profilePath: string): Promise<void> {
+    await this.refreshSidekickProfiles();
+    const profile = profilePath
+      ? findSidekickProfile(this.sidekickProfiles, profilePath)
+      : undefined;
+
+    if (profilePath && !profile) {
+      new Notice(`Sidekick agent profile not found: ${profilePath}`);
+      return;
+    }
+
+    this.settings.selectedAgentProfilePath = profile?.path ?? "";
+    if (profile && profile.modelLabels.length > 0) {
+      this.settings.selectedPiModel = profile.modelLabels.includes(this.settings.selectedPiModel)
+        ? this.settings.selectedPiModel
+        : profile.modelLabels[0];
+    }
+
+    await this.saveSettings();
+    this.addAgentEvent(
+      "status",
+      profile
+        ? `Selected Sidekick agent profile: ${getSidekickProfileDisplayName(profile)}.`
+        : "Cleared Sidekick agent profile."
+    );
+    this.refreshDashboardViews();
+  }
+
+  async createSidekickStarterFiles(): Promise<void> {
+    const files = getStarterSidekickFiles(this.settings.sidekickRootFolder);
+    let created = 0;
+    let skipped = 0;
+    for (const file of files) {
+      await this.ensureVaultFolder(path.posix.dirname(file.path));
+      if (this.app.vault.getFileByPath(file.path)) {
+        skipped += 1;
+        continue;
+      }
+
+      await this.app.vault.create(file.path, file.content);
+      created += 1;
+    }
+
+    await this.refreshSidekickProjectIndex(false);
+    await this.refreshSidekickProfiles();
+    new Notice(`Sidekick starter files: ${created} created, ${skipped} already existed.`);
+  }
+
+  async refreshSidekickProjectIndex(showNotice = true): Promise<void> {
+    const root = normalizeSidekickRoot(this.settings.sidekickRootFolder);
+    const indexPath = root + "/Memory/project-index.md";
+    await this.ensureVaultFolder(path.posix.dirname(indexPath));
+    const contents = this.buildSidekickProjectIndex(indexPath);
+    const existing = this.app.vault.getFileByPath(indexPath);
+    if (existing) {
+      await this.app.vault.modify(existing, contents);
+    } else {
+      await this.app.vault.create(indexPath, contents);
+    }
+
+    if (showNotice) {
+      new Notice(`Refreshed ${indexPath}.`);
+    }
+  }
+
+  async exportSidekickPiResources(): Promise<void> {
+    await this.refreshSidekickProfiles();
+    if (this.sidekickProfiles.length === 0) {
+      new Notice("Create or refresh Sidekick agent profiles before exporting Pi resources.");
+      return;
+    }
+
+    await this.ensureVaultFolder(".pi/prompts");
+    await this.ensureVaultFolder(".pi/skills/sidekick-vault-linker");
+    await this.ensureVaultFolder(".pi/skills/sidekick-glossary-curator");
+
+    let promptCount = 0;
+    for (const profile of this.sidekickProfiles) {
+      const promptPath = `.pi/prompts/${sanitizePiResourceName(getSidekickProfileSlug(profile))}.md`;
+      await this.upsertVaultFile(promptPath, buildPiPromptTemplate(profile));
+      promptCount += 1;
+    }
+
+    await this.upsertVaultFile(
+      ".pi/skills/sidekick-vault-linker/SKILL.md",
+      buildPiSkillResource(
+        "sidekick-vault-linker",
+        "Suggest conservative Obsidian internal links between related notes.",
+        [
+          "Use the vault project index, glossary, filenames, and headings as evidence.",
+          "Suggest links only for meaningful terms that clearly correspond to existing notes or top-level concepts.",
+          "Do not link common words or weak matches.",
+          "When used through Local Sidekick, prefer reviewed edit blocks for proposed link changes."
+        ]
+      )
+    );
+    await this.upsertVaultFile(
+      ".pi/skills/sidekick-glossary-curator/SKILL.md",
+      buildPiSkillResource(
+        "sidekick-glossary-curator",
+        "Create and maintain a grounded glossary for an Obsidian vault.",
+        [
+          "Only add terms that are supported by supplied note context.",
+          "For each term, include a short definition and source note path when available.",
+          "Prefer concise definitions over speculation.",
+          "When used through Local Sidekick, prefer reviewed edit blocks for glossary updates."
+        ]
+      )
+    );
+
+    const settings = await this.buildMergedPiSettings();
+    if (!settings) {
+      return;
+    }
+    await this.upsertVaultFile(".pi/settings.json", settings);
+
+    new Notice(`Exported ${promptCount} Sidekick prompt template(s) and 2 skills to .pi/.`);
+  }
+
+  private async buildMergedPiSettings(): Promise<string | undefined> {
+    const settingsPath = ".pi/settings.json";
+    const existing = this.app.vault.getFileByPath(settingsPath);
+    let data: Record<string, unknown> = {};
+    if (existing) {
+      const raw = (await this.app.vault.cachedRead(existing)).trim();
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          const record = asPlainRecord(parsed);
+          if (record) {
+            data = record;
+          } else {
+            throw new Error("Pi settings must be a JSON object.");
+          }
+        } catch (error) {
+          new Notice(`Could not merge .pi/settings.json: ${getErrorMessage(error)}`);
+          return undefined;
+        }
+      }
+    }
+
+    data.prompts = mergeStringSetting(data.prompts, "prompts");
+    data.skills = mergeStringSetting(data.skills, "skills");
+    return JSON.stringify(data, null, 2) + "\n";
+  }
+
+  private async upsertVaultFile(vaultPath: string, contents: string): Promise<void> {
+    const existing = this.app.vault.getFileByPath(vaultPath);
+    if (existing) {
+      await this.app.vault.modify(existing, contents);
+      return;
+    }
+
+    await this.app.vault.create(vaultPath, contents);
+  }
+
+  private buildSidekickProjectIndex(indexPath: string): string {
+    const markdownFiles = this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => file.path !== indexPath)
+      .sort((left, right) => left.path.localeCompare(right.path));
+    const indexedFiles = markdownFiles.slice(0, MAX_SIDEKICK_PROJECT_INDEX_FILES);
+    const lines = [
+      "# Project Index",
+      "",
+      "Generated by Local Sidekick: " + new Date().toISOString(),
+      "Markdown files indexed: " + indexedFiles.length.toLocaleString() +
+        (markdownFiles.length > indexedFiles.length
+          ? " of " + markdownFiles.length.toLocaleString()
+          : ""),
+      "",
+      "This file is generated from vault filenames and top headings. Edit durable summaries in `vault-summary.md`, `user-preferences.md`, and `glossary.md` instead.",
+      "",
+      "## Files"
+    ];
+
+    for (const file of indexedFiles) {
+      lines.push("- " + file.path);
+      const headings = (this.app.metadataCache.getFileCache(file)?.headings ?? [])
+        .filter((heading) => heading.level <= 2)
+        .slice(0, MAX_SIDEKICK_PROJECT_INDEX_HEADINGS_PER_FILE);
+      for (const heading of headings) {
+        lines.push(
+          "  - " + "#".repeat(heading.level) + " " + sanitizeProjectIndexText(heading.heading)
+        );
+      }
+    }
+
+    if (markdownFiles.length > indexedFiles.length) {
+      lines.push("", "_Index truncated. Narrow the Sidekick root or refresh from a smaller vault if needed._");
+    }
+
+    return lines.join("\n") + "\n";
+  }
+
   getSuggestedChatExportPath(): string {
     const record = this.createCurrentSessionRecord();
     const title = record.title || this.settings.agentSessionName || "chat";
@@ -705,7 +1018,7 @@ export default class AgentDashboardPlugin extends Plugin {
     prompt: string,
     contextMode: AgentPromptContextMode = "none"
   ): Promise<boolean> {
-    const trimmedPrompt = prompt.trim();
+    let trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
       new Notice("Enter a prompt first");
       return false;
@@ -713,6 +1026,18 @@ export default class AgentDashboardPlugin extends Plugin {
 
     if (this.agentSessionStatus === "running") {
       new Notice("Agent is already running");
+      return false;
+    }
+
+    const profileSelection = await this.resolveSidekickProfileForPrompt(trimmedPrompt);
+    if (!profileSelection) {
+      return false;
+    }
+
+    trimmedPrompt = profileSelection.prompt.trim();
+    const activeProfile = profileSelection.profile;
+    if (!trimmedPrompt) {
+      new Notice("Enter a prompt after the /agent command");
       return false;
     }
 
@@ -725,6 +1050,12 @@ export default class AgentDashboardPlugin extends Plugin {
     }
 
     const contextBlocks: PromptContextBlock[] = [];
+    const profileContext = await this.buildSidekickProfilePromptContext(activeProfile);
+    if (!profileContext) {
+      return false;
+    }
+
+    contextBlocks.push(...profileContext);
     if (contextMode !== "none" && contextMode !== "vault") {
       const context = await this.buildPromptContext(contextMode);
       if (!context) {
@@ -766,7 +1097,7 @@ export default class AgentDashboardPlugin extends Plugin {
     this.agentViewMode = "chat";
     this.agentSessionStatus = "running";
     const sessionPath = this.getPiSessionPath();
-    const toolMode = this.settings.piToolMode;
+    const toolMode = activeProfile?.toolMode ?? this.settings.piToolMode;
     const workspaceRoot = this.getVaultRoot();
     if (toolMode === "read-only" && !workspaceRoot) {
       this.agentSessionStatus = "idle";
@@ -1704,6 +2035,148 @@ export default class AgentDashboardPlugin extends Plugin {
       );
       this.refreshDashboardViews();
     }
+  }
+
+  private async resolveSidekickProfileForPrompt(
+    prompt: string
+  ): Promise<PromptSidekickProfileSelection | undefined> {
+    await this.refreshSidekickProfiles();
+    const lines = prompt.split(/\r?\n/);
+    const firstLine = lines[0]?.trim() ?? "";
+    if (!/^\/agent(?:\s|$)/i.test(firstLine)) {
+      return {
+        profile: this.getSelectedSidekickProfile(),
+        prompt
+      };
+    }
+
+    const reference = firstLine.replace(/^\/agent\b/i, "").trim();
+    const remainingPrompt = lines.slice(1).join("\n").trim();
+    if (!reference || /^(none|off|clear)$/i.test(reference)) {
+      if (this.settings.selectedAgentProfilePath) {
+        this.settings.selectedAgentProfilePath = "";
+        await this.saveSettings();
+        this.addAgentEvent("status", "Cleared Sidekick agent profile.");
+      }
+
+      return { prompt: remainingPrompt };
+    }
+
+    const profile = findSidekickProfile(this.sidekickProfiles, reference);
+    if (!profile) {
+      new Notice(`Sidekick agent profile not found: ${reference}`);
+      this.addAgentEvent(
+        "tool",
+        `Blocked /agent context: ${reference} was not found under ${this.settings.sidekickRootFolder}/Agents.`
+      );
+      this.refreshDashboardViews();
+      return undefined;
+    }
+
+    let shouldSaveSettings = false;
+    if (this.settings.selectedAgentProfilePath !== profile.path) {
+      this.settings.selectedAgentProfilePath = profile.path;
+      shouldSaveSettings = true;
+    }
+
+    if (
+      profile.modelLabels.length > 0 &&
+      !profile.modelLabels.includes(this.settings.selectedPiModel)
+    ) {
+      this.settings.selectedPiModel = profile.modelLabels[0];
+      shouldSaveSettings = true;
+    }
+
+    if (shouldSaveSettings) {
+      await this.saveSettings();
+    }
+
+    return { profile, prompt: remainingPrompt };
+  }
+
+  private async buildSidekickProfilePromptContext(
+    profile: SidekickProfile | undefined
+  ): Promise<PromptContextBlock[] | undefined> {
+    if (!profile) {
+      return [];
+    }
+
+    if (profile.includePaths.length > MAX_SIDEKICK_PROFILE_INCLUDES) {
+      new Notice(`Sidekick profile includes too many files. Limit is ${MAX_SIDEKICK_PROFILE_INCLUDES}.`);
+      return undefined;
+    }
+
+    const profileLines = [
+      `Name: ${profile.name}`,
+      `Path: ${profile.path}`,
+      profile.description ? `Description: ${profile.description}` : "",
+      profile.modelLabels.length > 0
+        ? `Model choices: ${profile.modelLabels.join(", ")}`
+        : "",
+      profile.toolMode ? `Requested Pi tools: ${describePiToolMode(profile.toolMode)}` : "",
+      "",
+      "Instructions:",
+      profile.prompt
+    ].filter(Boolean);
+
+    const blocks: PromptContextBlock[] = [
+      {
+        eventText: `Loaded Sidekick agent profile ${getSidekickProfileDisplayName(profile)}.`,
+        promptPrefix: formatPromptContext(
+          "Sidekick agent profile",
+          profile.path,
+          limitContextText(profileLines.join("\n"))
+        )
+      }
+    ];
+
+    for (const includePath of profile.includePaths) {
+      const file = this.app.vault.getFileByPath(includePath);
+      if (!file) {
+        new Notice(`Sidekick include not found: ${includePath}`);
+        this.addAgentEvent(
+          "tool",
+          `Blocked Sidekick include: ${includePath} was not found in the vault.`
+        );
+        this.refreshDashboardViews();
+        return undefined;
+      }
+
+      if (!TEXT_CONTEXT_EXTENSIONS.has(file.extension.toLowerCase())) {
+        new Notice(`Sidekick include must be a text file: ${file.path}`);
+        this.addAgentEvent(
+          "tool",
+          `Blocked Sidekick include: ${file.path} is not a readable text context file.`
+        );
+        this.refreshDashboardViews();
+        return undefined;
+      }
+
+      const targetPath = this.getVaultFileAbsolutePath(file);
+      const readDecision = this.assessSafetyRequest({
+        description: `Read Sidekick profile include: ${file.path}`,
+        kind: "read",
+        targetPath
+      });
+
+      if (!readDecision.allowed) {
+        this.addAgentEvent(
+          "tool",
+          `Safety guard blocked Sidekick include ${file.path}: ${readDecision.reason}`
+        );
+        this.refreshDashboardViews();
+        return undefined;
+      }
+
+      const contents = await this.app.vault.cachedRead(file);
+      const text = limitContextText(contents);
+      blocks.push({
+        eventText: `Loaded Sidekick memory include ${file.path} (${text.length.toLocaleString()} chars).`,
+        promptPrefix: formatPromptContext("Sidekick memory include", file.path, text)
+      });
+    }
+
+    return blocks;
   }
 
   private async buildPromptContext(
@@ -2737,6 +3210,74 @@ function countConversationMessages(events: AgentEvent[]): number {
   ).length;
 }
 
+function buildPiPromptTemplate(profile: SidekickProfile): string {
+  const lines = [
+    "---",
+    "description: " + yamlScalar(profile.description || `Local Sidekick profile ${profile.name}`),
+    profile.modelLabels[0] ? "model: " + yamlScalar(profile.modelLabels[0]) : "",
+    "---",
+    "",
+    "# " + profile.name,
+    "",
+    profile.prompt,
+    ""
+  ].filter(Boolean);
+
+  if (profile.includePaths.length > 0) {
+    lines.push(
+      "## Local Sidekick Memory Includes",
+      "",
+      "When running through Local Sidekick these files are injected automatically. When running Pi directly, add or read them explicitly as needed.",
+      "",
+      ...profile.includePaths.map((includePath) => "- " + includePath),
+      ""
+    );
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+function buildPiSkillResource(
+  name: string,
+  description: string,
+  instructions: string[]
+): string {
+  return [
+    "---",
+    "name: " + yamlScalar(name),
+    "description: " + yamlScalar(description),
+    "---",
+    "",
+    "# " + name,
+    "",
+    ...instructions.map((instruction) => "- " + instruction),
+    ""
+  ].join("\n");
+}
+
+function mergeStringSetting(value: unknown, entry: string): string[] {
+  const values = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+  if (!values.includes(entry)) {
+    values.push(entry);
+  }
+
+  return values;
+}
+
+function sanitizePiResourceName(value: string): string {
+  return slugifyFileName(value).replace(/\.md$/i, "") || "sidekick-profile";
+}
+
+function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}
+
+function sanitizeProjectIndexText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function truncatePlainText(value: string, maxLength: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {
@@ -2761,6 +3302,8 @@ function normalizeSettings(
     ),
     piToolMode: settings.piToolMode === "read-only" ? "read-only" : "disabled",
     piExperimentalFeaturesEnabled: settings.piExperimentalFeaturesEnabled === true,
+    selectedAgentProfilePath: settings.selectedAgentProfilePath?.trim() ?? "",
+    sidekickRootFolder: normalizeSidekickRoot(settings.sidekickRootFolder),
     statusPanelHeight: normalizeStatusPanelHeight(settings.statusPanelHeight),
     safeCommandAllowlist:
       settings.safeCommandAllowlist ?? DEFAULT_SETTINGS.safeCommandAllowlist,
