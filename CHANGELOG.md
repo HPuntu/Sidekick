@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Add vault-native Sidekick `.agent.md` profiles with selectable model lists, disabled/read-only tool preferences, included memory files, `/agent` prompt selection, and starter research/writing/code/linking/glossary agents.
+- Add generated `Sidekick/Prompts/*.prompt.md` prompt library starter files.
+- Add `Sidekick/Memory/project-index.md` generation from Markdown filenames and top headings.
+- Add explicit `.pi/` resource export for Sidekick prompt templates and vault-linker/glossary-curator skills.
+- Add persistent sidebar controls for Sidekick agent profiles alongside the model rail.
 - Prepare Pi session folders through the Obsidian vault adapter instead of runtime Node fs access.
 - Clarify shell execution, Pi launch, safe command allowlist, and vault enumeration boundaries in public docs.
 

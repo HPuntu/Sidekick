@@ -10,11 +10,19 @@ Local Sidekick is a local-first Obsidian plugin for working with Pi, Ollama, and
 
 ## Local Data
 
-The plugin can read files from the active Obsidian vault when you mention them with `@` or use vault context helpers. Optional external workspace roots are read-only and must be configured explicitly.
+The plugin can read files from the active Obsidian vault when you mention them with `@`, use vault context helpers, or select a Sidekick `.agent.md` profile with included prompt or memory files. Optional external workspace roots are read-only and must be configured explicitly.
 
 The plugin does not intentionally send data to hosted AI providers. Model prompts are sent to the configured local Pi and Ollama processes. If you enable web fetch, requested HTTPS URLs from explicitly allowlisted hosts are fetched directly by the plugin and included as prompt context.
 
 Settings, chat history, proposed edits, approvals, and session metadata are stored in the plugin data file in the vault configuration. That data may include prompts, model replies, note excerpts, proposed file contents, and local settings. It can be synced or backed up if your sync tool includes `.obsidian`, so treat `.obsidian/plugins/local-sidekick/data.json` as private vault data.
+
+## Sidekick Agent Profiles
+
+Sidekick profiles are Markdown files in the vault, usually under `Sidekick/Agents/*.agent.md`, with optional includes under `Sidekick/Prompts/` and `Sidekick/Memory/`. Treat them like local configuration: they can add prompt instructions, select preferred local models, include note excerpts or summaries, and request either disabled or read-only Pi tool mode.
+
+Profiles cannot enable Pi bash, edit, or write tools through Local Sidekick. They can still influence a local model's behavior, so inspect profile and memory files before using a vault from someone else.
+
+The explicit `Export Sidekick Pi resources` command writes `.pi/prompts`, `.pi/skills`, and merges entries into `.pi/settings.json`. This can affect Pi runs started directly from the vault root, so inspect generated `.pi/` files before using them with Pi outside Local Sidekick.
 
 ## Tool Boundaries
 
@@ -44,7 +52,7 @@ Pi tools are also disabled by default. The only exposed Pi tool mode is read-onl
 
 ## Untrusted Vault Settings
 
-Obsidian plugin data lives inside the vault. If you open a vault from someone else, its plugin data may contain a changed Pi executable path, safe command allowlist, web fetch allowlist, or experimental feature settings. Local Sidekick confirms non-default Pi executable paths once per Obsidian session before use. It also confirms before launching Pi with experimental extensions, skills, prompt templates, and context files enabled. You should still inspect settings before running the agent in an untrusted vault.
+Obsidian plugin data and Sidekick profile files live inside the vault. If you open a vault from someone else, its plugin data may contain a changed Pi executable path, safe command allowlist, web fetch allowlist, experimental feature settings, selected profile, profile/memory files, or existing `.pi/` resources. Local Sidekick confirms non-default Pi executable paths once per Obsidian session before use. It also confirms before launching Pi with experimental extensions, skills, prompt templates, and context files enabled. You should still inspect settings, `Sidekick/`, and `.pi/` before running the agent in an untrusted vault.
 
 ## Known Risks
 
@@ -52,7 +60,7 @@ Obsidian plugin data lives inside the vault. If you open a vault from someone el
 - A model with tool support may still misunderstand tool output.
 - Best-effort PDF extraction can miss text or fail on scanned, encrypted, malicious, or unusual PDFs. Compressed and decompressed stream limits reduce denial-of-service risk but do not make the parser a complete PDF sandbox.
 - Approved edits are real writes to your vault.
-- Vault search, file mentions, the vault index helper, and internal-link suggestions enumerate vault files locally so they can offer relevant context and path suggestions.
+- Vault search, file mentions, Sidekick project-index generation, the vault index helper, and internal-link suggestions enumerate vault files locally so they can offer relevant context and path suggestions.
 - Safe commands are only as safe as the commands you allowlist. Package-manager scripts can execute arbitrary project code and should not be added unless you trust the repo.
 - Any optional web fetch feature can expose requested URLs to the remote server hosting that URL.
 
