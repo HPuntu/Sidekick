@@ -33,6 +33,18 @@ Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark a
 ![dark_mode](images/dark_mode.png)
 Chat session agent reply streams are rendered in markdown with your Obsidian theme, handling math and standard formatting. For a full Obsidian IDE experience use the terminal plugin alongside this so you never have to leave Obsidian!
 
+### Internal Link Suggestions
+Sidekick also includes a plugin-native internal link suggester, available from the command palette or with @links, that proposes connections between notes without requiring Pi tool support. It builds conservative candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and shows reviewed diffs before any note is changed.
+
+### New Agentic Productivity Features Introduced in v0.1.8
+To better exploit the local-first nature of Sidekick, v0.1.8 introduces a set of features for turning your vault into a persistent source of agent instructions, memory, and workflow configuration.
+- Sidekick can now create a `Sidekick/` folder in the root of your vault, including template `.agent.md` profiles for different use cases.
+- `.agent.md` profiles can specify preferred local models, tool usage preferences, included memory files, and system-style instructions written directly in Markdown.
+- Agent profiles can be selected from the UI, with model choices narrowed to the models that make sense for that profile.
+- Custom prompts, vault memory, project summaries, glossaries, and other reusable context can now live as ordinary Markdown files inside the vault and be referenced with `@`.
+- Users can ask the agent to help generate or update profile files and memory files, making it easier to maintain things like a vault glossary or project index over time.
+- Sidekick can export selected profiles, prompts, and skills in a Pi-compatible format for use outside the plugin.
+
 ## Requirements
 - Obsidian desktop `1.5.0` or newer.
 - Node.js and npm for building from source.
@@ -42,10 +54,8 @@ Chat session agent reply streams are rendered in markdown with your Obsidian the
 
 Tool use depends on the selected model. Some Ollama models can chat but do not support tools. When a model does not support tools, keep Pi tools disabled and use explicit `@` context, `@search`, `@semantic`, and `@vault-index` instead.
 
-## Installation 
-You can simply install from the Obsidian app Community Plugins page by searching for "Local Sidekick".
-
-Or install from source...
+## Installation
+Local Sidekick is alpha software and is not yet listed in the Obsidian Community Plugins store, so it can't be found by searching inside Obsidian. For now, install it via [BRAT](https://github.com/TfTHacker/obsidian42-brat) (point it at this repository to install and auto-update from GitHub releases), or build from source (below). A Community Plugins submission is planned once it leaves alpha.
 
 ### From Source
 1. Clone this repository.
@@ -228,9 +238,13 @@ Limitations:
 When PDF extraction fails, the plugin should tell the model that content was unavailable rather than letting it infer details from the filename.
 
 ## Internal Link Suggestions
-The internal link tool is intentionally conservative. It builds candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and proposes links only when meaningful visible terms appear in the current note.
+Sidekick includes a plugin-native internal link suggester, available from the command palette or with `@links`, that proposes connections between notes without requiring Pi tool support. It builds conservative candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and shows reviewed diffs before any note is changed.
 
-Suggested links are rendered as reviewed diffs. They are not applied automatically.
+## Troubleshooting
+### "Offline error" when starting Pi or RPC
+Pi runs a version check against the network at startup, and the result is cached for a few days. On an offline machine that cache eventually expires, and the next launch fails with an offline error even though your models are local. Local Sidekick launches Pi with `PI_SKIP_VERSION_CHECK=1` so this check never runs and the plugin stays fully local. If you still see network errors on launch, confirm you are on a build from v0.1.11 or later.
+
+For fully offline use, keep an `ollama/` model selected in the model rail. A cloud-provider model such as `anthropic/...` still needs network access for inference; only `ollama/` models run entirely against your local Ollama host.
 
 ## Known Limitations
 - This is alpha software.
@@ -241,7 +255,7 @@ Suggested links are rendered as reviewed diffs. They are not applied automatical
 - Web fetch is intentionally limited, disabled by default, HTTPS-only, and requires an explicit host allowlist.
 - The reviewed edit path currently targets Markdown files.
 - There is no automated end-to-end test suite yet.
-- Public release metadata still needs maintainer-specific details before a Community Plugin submission.
+- Not yet listed in the Obsidian Community Plugins store; install from source or via BRAT until a submission is accepted.
 
 ## Commands
 The plugin registers these Obsidian commands:

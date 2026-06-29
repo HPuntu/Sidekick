@@ -53,19 +53,66 @@ jobs:
       - name: Update changelog
         run: |
           VERSION=$(node -p "require('./manifest.json').version")
+          RELEASE_DATE=$(date -u +%Y-%m-%d)
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
-          {
-            echo "## ${VERSION} - $(date -u +%Y-%m-%d)"
-            echo
-            if [ -n "$LAST_TAG" ]; then
-              git log --pretty="- %s (%h)" "${LAST_TAG}..${{ github.sha }}"
-            else
-              git log --pretty="- %s (%h)"
-            fi
-            echo
-            cat CHANGELOG.md
-          } > CHANGELOG.new
-          mv CHANGELOG.new CHANGELOG.md
+          if [ -n "$LAST_TAG" ]; then
+            RELEASE_COMMITS=$(git log --pretty="- %s (%h)" "${LAST_TAG}..${{ github.sha }}")
+          else
+            RELEASE_COMMITS=$(git log --pretty="- %s (%h)")
+          fi
+          VERSION="$VERSION" RELEASE_DATE="$RELEASE_DATE" RELEASE_COMMITS="$RELEASE_COMMITS" node <<'NODE'
+          const fs = require("fs");
+
+          const version = process.env.VERSION;
+          const releaseDate = process.env.RELEASE_DATE;
+          const releaseCommits = (process.env.RELEASE_COMMITS || "").trim();
+          const changelogPath = "CHANGELOG.md";
+          const source = fs.existsSync(changelogPath)
+            ? fs.readFileSync(changelogPath, "utf8").replace(/\r\n/g, "\n")
+            : "";
+          const lines = source.split("\n");
+          const unreleasedStart = lines.findIndex((line) => /^##\s+Unreleased\s*$/i.test(line.trim()));
+          let unreleasedNotes = "";
+
+          if (unreleasedStart >= 0) {
+            let unreleasedEnd = lines.length;
+            for (let index = unreleasedStart + 1; index < lines.length; index += 1) {
+              if (/^##\s+/.test(lines[index])) {
+                unreleasedEnd = index;
+                break;
+              }
+            }
+            unreleasedNotes = lines.slice(unreleasedStart + 1, unreleasedEnd).join("\n").trim();
+            lines.splice(unreleasedStart, unreleasedEnd - unreleasedStart);
+          }
+
+          let existing = lines.join("\n").trim();
+          const headingMatch = existing.match(/^#\s+Changelog\s*\n+/i);
+          const heading = headingMatch ? headingMatch[0].trim() : "";
+          if (headingMatch) {
+            existing = existing.slice(headingMatch[0].length).trim();
+          }
+
+          const releaseNotes = unreleasedNotes || releaseCommits || "- Release maintenance update.";
+          const nextSections = [];
+          if (heading) {
+            nextSections.push(heading, "");
+          }
+          nextSections.push(
+            "## Unreleased",
+            "",
+            `## ${version} - ${releaseDate}`,
+            "",
+            releaseNotes,
+            ""
+          );
+          if (existing) {
+            nextSections.push(existing);
+          }
+
+          const next = nextSections.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+          fs.writeFileSync(changelogPath, next);
+          NODE
 
       - run: npm run release:check
       - run: npm run package

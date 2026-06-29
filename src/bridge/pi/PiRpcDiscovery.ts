@@ -1,6 +1,8 @@
 import { spawn } from "child_process";
 import path from "path";
 
+import { piChildEnv } from "./piEnv";
+
 export type PiRpcDiscoveryStatus = "checking" | "error" | "ready" | "unknown";
 
 export interface PiRpcModelSummary {
@@ -129,6 +131,7 @@ function runRpcDiscovery(
     }
 
     const child = spawn(executablePath, args, {
+      env: piChildEnv(),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });

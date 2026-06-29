@@ -1,6 +1,8 @@
 import { ChildProcessWithoutNullStreams, spawn } from "child_process";
 import path from "path";
 
+import { piChildEnv } from "./piEnv";
+
 export interface PiReadOnlyPromptOptions {
   executablePath: string;
   modelLabel?: string;
@@ -93,6 +95,7 @@ export class PiReadOnlyPromptRun {
     const args = buildReadOnlyArgs(this.options);
     this.child = spawn(this.options.executablePath, args, {
       cwd: this.options.workspaceRoot || undefined,
+      env: piChildEnv(),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -422,6 +425,7 @@ export function setPiRpcModel(
       workspaceRoot: ""
     });
     const child = spawn(normalizedPath, args, {
+      env: piChildEnv(),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });

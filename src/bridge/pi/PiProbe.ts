@@ -1,6 +1,8 @@
 import { execFile } from "child_process";
 import path from "path";
 
+import { piChildEnv } from "./piEnv";
+
 export type PiStatus = "available" | "checking" | "unavailable" | "unknown";
 
 export interface PiSnapshot {
@@ -103,6 +105,7 @@ function execFileText(
       executablePath,
       args,
       {
+        env: piChildEnv(),
         maxBuffer: 64 * 1024,
         shell: false,
         timeout: timeoutMs
