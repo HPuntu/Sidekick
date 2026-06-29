@@ -54,10 +54,8 @@ To better exploit the local-first nature of Sidekick, v0.1.8 introduces a set of
 
 Tool use depends on the selected model. Some Ollama models can chat but do not support tools. When a model does not support tools, keep Pi tools disabled and use explicit `@` context, `@search`, `@semantic`, and `@vault-index` instead.
 
-## Installation 
-You can simply install from the Obsidian app Community Plugins page by searching for "Local Sidekick".
-
-Or install from source...
+## Installation
+Local Sidekick is alpha software and is not yet listed in the Obsidian Community Plugins store, so it can't be found by searching inside Obsidian. For now, install it via [BRAT](https://github.com/TfTHacker/obsidian42-brat) (point it at this repository to install and auto-update from GitHub releases), or build from source (below). A Community Plugins submission is planned once it leaves alpha.
 
 ### From Source
 1. Clone this repository.
@@ -242,6 +240,12 @@ When PDF extraction fails, the plugin should tell the model that content was una
 ## Internal Link Suggestions
 Sidekick includes a plugin-native internal link suggester, available from the command palette or with `@links`, that proposes connections between notes without requiring Pi tool support. It builds conservative candidates from Markdown filenames and top-level headings, ranks them with local related-note search, and shows reviewed diffs before any note is changed.
 
+## Troubleshooting
+### "Offline error" when starting Pi or RPC
+Pi runs a version check against the network at startup, and the result is cached for a few days. On an offline machine that cache eventually expires, and the next launch fails with an offline error even though your models are local. Local Sidekick launches Pi with `PI_SKIP_VERSION_CHECK=1` so this check never runs and the plugin stays fully local. If you still see network errors on launch, confirm you are on a build from v0.1.11 or later.
+
+For fully offline use, keep an `ollama/` model selected in the model rail. A cloud-provider model such as `anthropic/...` still needs network access for inference; only `ollama/` models run entirely against your local Ollama host.
+
 ## Known Limitations
 - This is alpha software.
 - Local models may hallucinate unless given exact context.
@@ -251,7 +255,7 @@ Sidekick includes a plugin-native internal link suggester, available from the co
 - Web fetch is intentionally limited, disabled by default, HTTPS-only, and requires an explicit host allowlist.
 - The reviewed edit path currently targets Markdown files.
 - There is no automated end-to-end test suite yet.
-- Public release metadata still needs maintainer-specific details before a Community Plugin submission.
+- Not yet listed in the Obsidian Community Plugins store; install from source or via BRAT until a submission is accepted.
 
 ## Commands
 The plugin registers these Obsidian commands:
