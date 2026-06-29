@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 0.1.11 - 2026-06-29
+
 ### Fixed
 
 - Launch Pi with `PI_SKIP_VERSION_CHECK` so an expired startup version-check cache no longer surfaces as an offline error when running fully offline.
