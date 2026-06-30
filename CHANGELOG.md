@@ -4,6 +4,10 @@
 
 - Address the Obsidian plugin review: require Obsidian 1.7.2+ for modern vault and workspace APIs, use `Setting` headings in the settings tab, render Markdown through a managed component instead of the plugin instance, move tool-card styling into CSS, await leaf reveal, and stop detaching the view leaf on unload.
 
+## 0.2.0 - 2026-06-30
+
+### Added
+
 ## 0.1.11 - 2026-06-29
 
 ### Fixed
