@@ -55,7 +55,7 @@ To better exploit the local-first nature of Sidekick, v0.1.8 introduces a set of
 Tool use depends on the selected model. Some Ollama models can chat but do not support tools. When a model does not support tools, keep Pi tools disabled and use explicit `@` context, `@search`, `@semantic`, and `@vault-index` instead.
 
 ## Installation
-Local Sidekick is alpha software and is not yet listed in the Obsidian Community Plugins store, so it can't be found by searching inside Obsidian. For now, install it via [BRAT](https://github.com/TfTHacker/obsidian42-brat) (point it at this repository to install and auto-update from GitHub releases), or build from source (below). A Community Plugins submission is planned once it leaves alpha.
+Install from inside Obsidian: open Settings → Community plugins, browse, search for "Local Sidekick", install, and enable it. You can also build from source (below).
 
 ### From Source
 1. Clone this repository.
@@ -255,7 +255,6 @@ For fully offline use, keep an `ollama/` model selected in the model rail. A clo
 - Web fetch is intentionally limited, disabled by default, HTTPS-only, and requires an explicit host allowlist.
 - The reviewed edit path currently targets Markdown files.
 - There is no automated end-to-end test suite yet.
-- Not yet listed in the Obsidian Community Plugins store; install from source or via BRAT until a submission is accepted.
 
 ## Commands
 The plugin registers these Obsidian commands:

@@ -371,7 +371,7 @@ function parseInlineList(value: string): string[] {
 }
 
 function stripYamlQuotes(value: string): string {
-  return value.replace(/^['\"]|['\"]$/g, "");
+  return value.replace(/^['"]|['"]$/g, "");
 }
 
 function normalizeModelLabel(value: string): string {
@@ -386,7 +386,7 @@ function normalizeModelLabel(value: string): string {
 function normalizeVaultPath(value: string): string {
   return value
     .trim()
-    .replace(/^['\"]|['\"]$/g, "")
+    .replace(/^['"]|['"]$/g, "")
     .replace(/^\/+/, "")
     .replace(/^\.\//, "")
     .replace(/\/+/g, "/")

@@ -1,4 +1,4 @@
-import { ButtonComponent, MarkdownRenderer, setIcon, TFile } from "obsidian";
+import { ButtonComponent, Component, MarkdownRenderer, setIcon, TFile } from "obsidian";
 
 import type AgentDashboardPlugin from "../main";
 import type { AgentSessionHistoryItem, ProposedEditRecord } from "../main";
@@ -22,6 +22,15 @@ export interface DashboardRenderOptions {
 const openToolEventIds = new Set<string>();
 let menuOpen = false;
 let agentPickerOpen = false;
+let markdownComponent: Component | undefined;
+
+function getMarkdownRenderComponent(): Component {
+  if (!markdownComponent) {
+    markdownComponent = new Component();
+    markdownComponent.load();
+  }
+  return markdownComponent;
+}
 
 export function renderDashboardShell(
   plugin: AgentDashboardPlugin,
@@ -38,6 +47,10 @@ export function renderDashboardShell(
     renderEmbeddedShell(plugin, containerEl, options);
     return;
   }
+
+  markdownComponent?.unload();
+  markdownComponent = new Component();
+  markdownComponent.load();
 
   renderTopBar(plugin, containerEl, options);
   if (menuOpen) {
@@ -1059,165 +1072,6 @@ function getActiveMention(
   };
 }
 
-function renderAgentProfileSelector(
-  plugin: AgentDashboardPlugin,
-  containerEl: HTMLElement,
-  rootEl: HTMLElement,
-  options: DashboardRenderOptions
-): void {
-  const profiles = plugin.getSidekickProfiles();
-  const selectedProfile = plugin.getSelectedSidekickProfile();
-  const selectorEl = containerEl.createDiv({
-    cls: "agent-dashboard__agent-profile-selector"
-  });
-  const rowEl = selectorEl.createDiv({
-    cls: "agent-dashboard__agent-profile-row"
-  });
-  rowEl.createSpan({
-    cls: "agent-dashboard__agent-profile-label",
-    text: "Agent"
-  });
-
-  const selectEl = rowEl.createEl("select", {
-    cls: "agent-dashboard__agent-profile-select"
-  });
-  const noneOption = selectEl.createEl("option", { text: "No profile" });
-  noneOption.value = "";
-  for (const profile of profiles) {
-    const optionEl = selectEl.createEl("option", { text: profile.name });
-    optionEl.value = profile.path;
-  }
-  selectEl.value = selectedProfile?.path ?? "";
-  selectEl.disabled = plugin.agentSessionStatus === "running";
-  selectEl.addEventListener("change", async () => {
-    await plugin.selectSidekickProfile(selectEl.value);
-    renderDashboardShell(plugin, rootEl, options);
-  });
-
-  new ButtonComponent(rowEl)
-    .setButtonText("Refresh")
-    .setTooltip("Reload Sidekick agent profiles")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(async () => {
-      await plugin.refreshSidekickProfiles(true);
-      renderDashboardShell(plugin, rootEl, options);
-    });
-
-  new ButtonComponent(rowEl)
-    .setButtonText("Create")
-    .setTooltip("Create starter Sidekick agent and memory files")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(async () => {
-      await plugin.createSidekickStarterFiles();
-      renderDashboardShell(plugin, rootEl, options);
-    });
-
-  selectorEl.createDiv({
-    cls: "agent-dashboard__agent-profile-meta",
-    text: describeAgentProfileSelection(selectedProfile, profiles.length)
-  });
-}
-
-function describeAgentProfileSelection(
-  profile: ReturnType<AgentDashboardPlugin["getSelectedSidekickProfile"]>,
-  profileCount: number
-): string {
-  if (!profile) {
-    return profileCount > 0
-      ? "Choose a profile or use /agent name as the first line of a prompt."
-      : "Create starter profiles under Sidekick/Agents, or add your own .agent.md files.";
-  }
-
-  const parts = [];
-  if (profile.description) {
-    parts.push(profile.description);
-  }
-  if (profile.modelLabels.length > 0) {
-    parts.push(`${profile.modelLabels.length} model choice${profile.modelLabels.length === 1 ? "" : "s"}`);
-  }
-  if (profile.includePaths.length > 0) {
-    parts.push(`${profile.includePaths.length} include${profile.includePaths.length === 1 ? "" : "s"}`);
-  }
-  if (profile.toolMode) {
-    parts.push(profile.toolMode === "read-only" ? "read-only tools" : "tools disabled");
-  }
-
-  return parts.join(" · ") || profile.path;
-}
-
-function renderModelSelector(
-  plugin: AgentDashboardPlugin,
-  containerEl: HTMLElement,
-  rootEl: HTMLElement,
-  options: DashboardRenderOptions
-): void {
-  const models = plugin.getSelectablePiModels();
-  const selectorEl = containerEl.createDiv({
-    cls: "agent-dashboard__model-selector"
-  });
-  const headerEl = selectorEl.createDiv({
-    cls: "agent-dashboard__model-selector-header"
-  });
-  headerEl.createSpan({
-    cls: "agent-dashboard__model-label",
-    text: "Model"
-  });
-  const selectedLabel = getCurrentModelLabel(plugin);
-  if (selectedLabel) {
-    renderModelBadge(headerEl, selectedLabel, "agent-dashboard__model-current");
-  }
-
-  new ButtonComponent(headerEl)
-    .setButtonText(models.length === 0 ? "Discover Models" : "Refresh")
-    .setTooltip("Discover Pi RPC models")
-    .setDisabled(
-      plugin.agentSessionStatus === "running" ||
-        plugin.piRpcDiscoverySnapshot.status === "checking"
-    )
-    .onClick(async () => {
-      await plugin.refreshPiRpcDiscovery(true);
-      renderDashboardShell(plugin, rootEl, options);
-    });
-
-  if (models.length === 0) {
-    selectorEl.createDiv({
-      cls: "agent-dashboard__model-meta",
-      text:
-        plugin.piRpcDiscoverySnapshot.status === "checking"
-          ? "Discovering models..."
-          : "Run discovery to show local Pi/Ollama models."
-    });
-    return;
-  }
-
-  const railEl = selectorEl.createDiv({
-    cls: "agent-dashboard__model-rail"
-  });
-  for (const model of models) {
-    const modelEl = railEl.createEl("button", {
-      cls: "agent-dashboard__model-chip",
-      type: "button"
-    });
-    modelEl.toggleClass("is-selected", model.label === selectedLabel);
-    modelEl.setAttr("aria-label", `Select ${model.label}`);
-    renderModelBadge(modelEl, model.label, "agent-dashboard__model-chip-icon");
-    modelEl.createSpan({
-      cls: "agent-dashboard__model-chip-label",
-      text: getShortModelLabel(model.label)
-    });
-    const metaText = describeSelectedModel(plugin, model);
-    if (metaText) {
-      modelEl.createSpan({
-        cls: "agent-dashboard__model-chip-meta",
-        text: metaText
-      });
-    }
-    modelEl.addEventListener("click", () => {
-      void plugin.selectPiModel(model.label);
-    });
-  }
-}
-
 function renderCurrentAgentProfilePill(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement
@@ -1308,44 +1162,6 @@ function getModelLogoText(modelLabel: string): string {
   }
 
   return "O";
-}
-
-function describeSelectedModel(
-  plugin: AgentDashboardPlugin,
-  model: PiRpcDiscoverySnapshot["models"][number]
-): string {
-  const parts = [];
-
-  if (model.contextWindow) {
-    parts.push(`${Math.round(model.contextWindow / 1000)}k`);
-  }
-
-  if (model.reasoning) {
-    parts.push("reasoning");
-  }
-
-  for (const capability of getOllamaCapabilitiesForPiModel(plugin, model.label)) {
-    if (capability === "tools") {
-      parts.push("tools");
-    } else if (capability === "vision") {
-      parts.push("vision");
-    } else if (capability === "thinking" && !parts.includes("reasoning")) {
-      parts.push("thinking");
-    }
-  }
-
-  return parts.join(" · ");
-}
-
-function getOllamaCapabilitiesForPiModel(
-  plugin: AgentDashboardPlugin,
-  modelLabel: string
-): string[] {
-  const modelName = modelLabel.replace(/^ollama\//, "");
-  return (
-    plugin.ollamaSnapshot.models.find((model) => model.name === modelName)
-      ?.capabilities ?? []
-  );
 }
 
 function renderApprovalQueue(
@@ -1484,7 +1300,7 @@ function renderAgentEvent(
     event.text,
     textEl,
     plugin.app.workspace.getActiveFile()?.path ?? "",
-    plugin
+    getMarkdownRenderComponent()
   ).then(() => {
     linkInlineReferencedFiles(plugin, textEl);
   });
@@ -1501,9 +1317,6 @@ function renderToolEvent(
   const cardEl = containerEl.createDiv({
     cls: `agent-dashboard__tool-card agent-dashboard__tool-card--${tool.status}`
   });
-  cardEl.style.display = "block";
-  cardEl.style.minHeight = "42px";
-  cardEl.style.overflow = "hidden";
 
   const bodyId = `agent-dashboard-tool-${event.id}`;
   const headerEl = cardEl.createDiv({
@@ -1515,55 +1328,28 @@ function renderToolEvent(
     },
     cls: "agent-dashboard__tool-header"
   });
-  headerEl.style.alignItems = "center";
-  headerEl.style.cursor = "pointer";
-  headerEl.style.display = "grid";
-  headerEl.style.gap = "8px";
-  headerEl.style.gridTemplateColumns = "auto minmax(0, 1fr) auto";
-  headerEl.style.minHeight = "40px";
-  headerEl.style.padding = "8px";
-  headerEl.style.width = "100%";
 
   const disclosureEl = headerEl.createSpan({
     attr: { "aria-hidden": "true" },
     cls: "agent-dashboard__tool-disclosure"
   });
   disclosureEl.setText("▸");
-  disclosureEl.style.color = "var(--agent-dashboard-muted)";
-  disclosureEl.style.display = "inline-block";
-  disclosureEl.style.width = "10px";
 
   const titleEl = headerEl.createSpan({
     cls: "agent-dashboard__tool-title"
   });
-  titleEl.style.alignItems = "center";
-  titleEl.style.color = "var(--text-normal)";
-  titleEl.style.display = "inline-flex";
-  titleEl.style.fontSize = "var(--font-ui-small)";
-  titleEl.style.fontWeight = "600";
-  titleEl.style.gap = "6px";
-  titleEl.style.minWidth = "0";
-  titleEl.style.overflow = "hidden";
-  titleEl.style.textOverflow = "ellipsis";
-  titleEl.style.whiteSpace = "nowrap";
   const iconEl = titleEl.createSpan({
     cls: "agent-dashboard__tool-icon"
   });
   setIcon(iconEl, getToolStatusIcon(tool));
-  const labelEl = titleEl.createSpan({
+  titleEl.createSpan({
     cls: "agent-dashboard__tool-label",
     text: `Tool used: ${getToolDisplayName(tool)}`
   });
-  labelEl.style.minWidth = "0";
-  labelEl.style.overflow = "hidden";
-  labelEl.style.textOverflow = "ellipsis";
 
   const summaryMetaEl = headerEl.createSpan({
     cls: "agent-dashboard__tool-summary-meta"
   });
-  summaryMetaEl.style.display = "inline-flex";
-  summaryMetaEl.style.gap = "8px";
-  summaryMetaEl.style.whiteSpace = "nowrap";
   summaryMetaEl.createSpan({
     cls: "agent-dashboard__tool-status",
     text: tool.status
@@ -1580,7 +1366,6 @@ function renderToolEvent(
   const setOpen = (nextOpen: boolean) => {
     cardEl.toggleClass("is-open", nextOpen);
     disclosureEl.setText(nextOpen ? "▾" : "▸");
-    bodyEl.style.display = nextOpen ? "flex" : "none";
     headerEl.setAttr("aria-expanded", String(nextOpen));
     if (nextOpen) {
       openToolEventIds.add(event.id);
@@ -1637,7 +1422,7 @@ function renderToolEvent(
       event.text,
       textEl,
       plugin.app.workspace.getActiveFile()?.path ?? "",
-      plugin
+      getMarkdownRenderComponent()
     ).then(() => {
       linkInlineReferencedFiles(plugin, textEl);
     });
@@ -1928,7 +1713,7 @@ function linkInlineReferencedFiles(
   }
 
   const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(
+  const walker = rootEl.ownerDocument.createTreeWalker(
     rootEl,
     NodeFilter.SHOW_TEXT,
     {

@@ -60,7 +60,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Local Sidekick" });
+    new Setting(containerEl).setName("Local Sidekick").setHeading();
 
     new Setting(containerEl)
       .setName("Start bridge automatically")
@@ -308,7 +308,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
       );
 
 
-    containerEl.createEl("h3", { text: "Experimental" });
+    new Setting(containerEl).setName("Experimental").setHeading();
 
     new Setting(containerEl)
       .setName("Allow Pi extensions, skills, prompt templates, and context files")

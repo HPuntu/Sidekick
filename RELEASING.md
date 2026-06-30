@@ -54,12 +54,13 @@ Before a broad public or Community Plugin release:
 5. `.github/workflows/promote-release.yml` runs automatically.
 6. If checks pass, the workflow commits the version/changelog update, tags the exact version, and publishes release assets.
 
-Release assets are:
+Release assets are the three files Obsidian installs, published with GitHub build provenance attestations:
 
 - `main.js`
 - `manifest.json`
 - `styles.css`
-- `dist/obsidian-sidekick-<version>.zip`
+
+The release no longer attaches the `dist/obsidian-sidekick-<version>.zip`, because Obsidian ignores any extra files and its plugin review flags them. The zip is still produced locally by `npm run package` / `npm run release:zip` if you need it.
 
 ## GitHub Repository Setup
 

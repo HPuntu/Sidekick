@@ -984,9 +984,20 @@
 }
 
 .agent-dashboard__tool-content {
+  display: none;
   flex-direction: column;
   gap: 6px;
   padding: 8px;
+}
+
+.agent-dashboard__tool-card.is-open > .agent-dashboard__tool-content {
+  display: flex;
+}
+
+.agent-dashboard__tool-disclosure {
+  color: var(--agent-dashboard-muted);
+  display: inline-block;
+  width: 10px;
 }
 
 .agent-dashboard__tool-title {

@@ -801,10 +801,6 @@ function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function stripTrailingCarriageReturn(value: string): string {
   return value.endsWith("\r") ? value.slice(0, -1) : value;
 }

@@ -452,15 +452,14 @@ export default class AgentDashboardPlugin extends Plugin {
     new Notice("Local Sidekick loaded");
   }
 
-  async onunload(): Promise<void> {
+  onunload(): void {
     if (this.activePromptRun) {
       this.activePromptRun.abort();
       this.activePromptRun = undefined;
     }
 
-    await this.flushPluginDataSave();
-    await this.bridge.stop();
-    this.app.workspace.detachLeavesOfType(AGENT_DASHBOARD_VIEW_TYPE);
+    void this.flushPluginDataSave();
+    void this.bridge.stop();
   }
 
   async activateView(): Promise<void> {
@@ -485,7 +484,7 @@ export default class AgentDashboardPlugin extends Plugin {
       });
     }
 
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
 
   async loadSettings(): Promise<void> {

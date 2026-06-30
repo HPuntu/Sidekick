@@ -5,7 +5,9 @@ on:
     branches: [main]
 
 permissions:
+  attestations: write
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -115,7 +117,14 @@ jobs:
           NODE
 
       - run: npm run release:check
-      - run: npm run package
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
 
       - name: Commit version update
         run: |
@@ -143,6 +152,5 @@ jobs:
             main.js \
             manifest.json \
             styles.css \
-            "dist/obsidian-sidekick-${VERSION}.zip" \
             --title "${VERSION}" \
             --notes-file CHANGELOG.md
