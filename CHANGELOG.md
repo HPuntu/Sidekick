@@ -2,6 +2,10 @@
 
 ### Added
 
+## 0.1.11 - 2026-06-29
+
+### Fixed
+
 - One-click Start/Stop pipeline: checks Ollama, probes Pi, discovers RPC models, starts the bridge, and activates the selected model.
 
 ### Changed
