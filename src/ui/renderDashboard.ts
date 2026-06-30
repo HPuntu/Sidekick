@@ -19,11 +19,9 @@ export interface DashboardRenderOptions {
   session?: string;
   model?: string;
 }
-const STATUS_PANEL_MIN_HEIGHT = 96;
-const STATUS_PANEL_MAX_HEIGHT = 420;
-const AGENT_PANEL_MIN_HEIGHT = 220;
-const PANEL_RESIZE_KEY_STEP = 16;
 const openToolEventIds = new Set<string>();
+let menuOpen = false;
+let agentPickerOpen = false;
 
 export function renderDashboardShell(
   plugin: AgentDashboardPlugin,
@@ -37,8 +35,24 @@ export function renderDashboardShell(
 
   if (options.embedded) {
     containerEl.style.minHeight = `${plugin.settings.compactBlockHeight}px`;
+    renderEmbeddedShell(plugin, containerEl, options);
+    return;
   }
 
+  renderTopBar(plugin, containerEl, options);
+  if (menuOpen) {
+    renderMenuDropdown(plugin, containerEl, options);
+  }
+
+  const bodyEl = containerEl.createDiv({ cls: "agent-dashboard__body" });
+  renderAgentPanel(plugin, bodyEl, options);
+}
+
+function renderEmbeddedShell(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
   const headerEl = containerEl.createDiv({ cls: "agent-dashboard__header" });
   const titleWrapEl = headerEl.createDiv({ cls: "agent-dashboard__title-wrap" });
   const titleIconEl = titleWrapEl.createSpan({
@@ -46,104 +60,270 @@ export function renderDashboardShell(
     cls: "agent-dashboard__title-icon"
   });
   setIcon(titleIconEl, "bot");
-  titleWrapEl.createEl("p", {
-    text: describeDashboard(plugin, options)
-  });
+  titleWrapEl.createEl("p", { text: describeDashboard(plugin, options) });
 
   const actionsEl = headerEl.createDiv({ cls: "agent-dashboard__actions" });
-
   new ButtonComponent(actionsEl)
-    .setButtonText(options.embedded ? "Open" : "Refresh")
-    .setTooltip(options.embedded ? "Open full dashboard" : "Refresh status")
+    .setButtonText("Open")
+    .setTooltip("Open full dashboard")
     .onClick(async () => {
-      if (options.embedded) {
-        await plugin.activateView();
-        return;
-      }
-
-      await plugin.refreshOllamaStatus(true);
-      renderDashboardShell(plugin, containerEl, options);
+      await plugin.activateView();
     });
 
-  const bodyEl = containerEl.createDiv({ cls: "agent-dashboard__body" });
-  const statusPanelEl = renderStatusPanel(plugin, bodyEl, options);
-  if (!options.embedded) {
-    renderPanelResizeHandle(plugin, bodyEl, statusPanelEl);
-  }
-  renderAgentPanel(plugin, bodyEl, options);
+  const listEl = containerEl.createDiv({ cls: "agent-dashboard__status-list" });
+  renderStatusList(plugin, listEl, options);
 }
 
-function renderStatusPanel(
+function renderTopBar(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
   options: DashboardRenderOptions
-): HTMLElement {
-  const panelEl = containerEl.createDiv({
-    cls: "agent-dashboard__panel agent-dashboard__panel--status"
-  });
-  setStatusPanelHeight(
-    panelEl,
-    plugin.settings.statusPanelHeight,
-    getMaxStatusPanelHeight(containerEl)
-  );
-  const headingEl = panelEl.createDiv({ cls: "agent-dashboard__panel-heading" });
-  headingEl.createEl("h4", { text: "Status" });
+): void {
+  const barEl = containerEl.createDiv({ cls: "agent-dashboard__topbar" });
+  const rowEl = barEl.createDiv({ cls: "agent-dashboard__topbar-row" });
 
-  const bridgeSnapshot = plugin.bridge.getSnapshot();
-  const rootEl = containerEl.parentElement ?? containerEl;
+  const menuButton = new ButtonComponent(rowEl)
+    .setIcon(menuOpen ? "x" : "menu")
+    .setTooltip(menuOpen ? "Hide status menu" : "Show status menu")
+    .onClick(() => {
+      menuOpen = !menuOpen;
+      renderDashboardShell(plugin, containerEl, options);
+    });
+  menuButton.buttonEl.addClass("agent-dashboard__menu-toggle");
+  menuButton.buttonEl.toggleClass("is-active", menuOpen);
+
+  renderAgentPickerToggle(plugin, rowEl, containerEl, options);
+
+  const running = plugin.bridge.getSnapshot().status === "running";
+  const startButton = new ButtonComponent(
+    rowEl.createDiv({ cls: "agent-dashboard__topbar-actions" })
+  )
+    .setButtonText(running ? "Stop" : "Start")
+    .setTooltip(
+      running
+        ? "Stop the local model pipeline (Stop, then Start to restart)"
+        : "Boot Ollama, Pi, the RPC bridge, and activate the model"
+    )
+    .setCta()
+    .onClick(async () => {
+      if (running) {
+        await plugin.bridge.stop();
+      } else {
+        await plugin.startPipeline();
+      }
+      renderDashboardShell(plugin, containerEl, options);
+    });
+  startButton.buttonEl.addClass("agent-dashboard__start-button");
+
+  if (agentPickerOpen) {
+    renderAgentPickerPopover(plugin, barEl, containerEl, options);
+  }
+
+  renderPipelineIndicator(plugin, barEl);
+}
+
+function renderAgentPickerToggle(
+  plugin: AgentDashboardPlugin,
+  rowEl: HTMLElement,
+  rootEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const profile = plugin.getSelectedSidekickProfile();
+  const modelLabel = getCurrentModelLabel(plugin);
+  const toggleEl = rowEl.createEl("button", {
+    cls: "agent-dashboard__agent-picker-toggle",
+    type: "button"
+  });
+  toggleEl.toggleClass("is-active", agentPickerOpen);
+  toggleEl.createSpan({
+    cls: "agent-dashboard__agent-picker-label",
+    text: `${profile ? profile.name : "No profile"} · ${modelLabel ? getShortModelLabel(modelLabel) : "no model"}`
+  });
+  setIcon(
+    toggleEl.createSpan({ cls: "agent-dashboard__agent-picker-caret" }),
+    agentPickerOpen ? "chevron-up" : "chevron-down"
+  );
+  toggleEl.addEventListener("click", () => {
+    agentPickerOpen = !agentPickerOpen;
+    renderDashboardShell(plugin, rootEl, options);
+  });
+}
+
+function renderAgentPickerPopover(
+  plugin: AgentDashboardPlugin,
+  barEl: HTMLElement,
+  rootEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const popoverEl = barEl.createDiv({
+    cls: "agent-dashboard__agent-picker-popover"
+  });
+
+  const headingEl = popoverEl.createDiv({
+    cls: "agent-dashboard__agent-picker-heading-row"
+  });
+  headingEl.createSpan({
+    cls: "agent-dashboard__agent-picker-heading",
+    text: "Model · profile"
+  });
   const controlsEl = headingEl.createDiv({
     cls: "agent-dashboard__panel-controls"
   });
-
   new ButtonComponent(controlsEl)
-    .setButtonText("Ollama")
-    .setTooltip("Check Ollama status")
+    .setButtonText("Refresh")
+    .setTooltip("Reload Sidekick agent profiles")
     .onClick(async () => {
-      await plugin.refreshOllamaStatus(true);
+      await plugin.refreshSidekickProfiles(true);
+      renderDashboardShell(plugin, rootEl, options);
+    });
+  new ButtonComponent(controlsEl)
+    .setButtonText("Create")
+    .setTooltip("Create starter Sidekick agent and memory files")
+    .onClick(async () => {
+      await plugin.createSidekickStarterFiles();
       renderDashboardShell(plugin, rootEl, options);
     });
 
-  new ButtonComponent(controlsEl)
-    .setButtonText("Pi")
-    .setTooltip("Check Pi executable")
-    .onClick(async () => {
-      await plugin.refreshPiStatus(true);
-      renderDashboardShell(plugin, rootEl, options);
+  const models = plugin.getSelectablePiModels();
+  if (models.length === 0) {
+    popoverEl.createDiv({
+      cls: "agent-dashboard__agent-picker-empty",
+      text:
+        plugin.piRpcDiscoverySnapshot.status === "checking"
+          ? "Discovering models…"
+          : "Press Start to discover local models."
     });
-
-  new ButtonComponent(controlsEl)
-    .setButtonText("RPC")
-    .setTooltip("Discover Pi RPC readiness")
-    .onClick(async () => {
-      await plugin.refreshPiRpcDiscovery(true);
-      renderDashboardShell(plugin, rootEl, options);
-    });
-
-  new ButtonComponent(controlsEl)
-    .setButtonText(bridgeSnapshot.status === "running" ? "Restart" : "Start")
-    .setTooltip("Start or restart local bridge")
-    .onClick(async () => {
-      if (bridgeSnapshot.status === "running") {
-        await plugin.bridge.restart();
-      } else {
-        await plugin.bridge.start();
-      }
-
-      renderDashboardShell(plugin, rootEl, options);
-    });
-
-  if (bridgeSnapshot.status === "running") {
-    new ButtonComponent(controlsEl)
-      .setButtonText("Stop")
-      .setTooltip("Stop local bridge")
-      .onClick(async () => {
-        await plugin.bridge.stop();
-        renderDashboardShell(plugin, rootEl, options);
-      });
+    return;
   }
 
-  const listEl = panelEl.createDiv({ cls: "agent-dashboard__status-list" });
-  renderBridgeStatusItem(listEl, bridgeSnapshot);
+  const modelLabel = getCurrentModelLabel(plugin);
+  const profiles = plugin.getSidekickProfiles();
+  const selectedProfile = plugin.getSelectedSidekickProfile();
+
+  for (const model of models) {
+    const isSelectedModel = model.label === modelLabel;
+    const modelEl = popoverEl.createDiv({
+      cls: "agent-dashboard__agent-picker-model"
+    });
+    modelEl.toggleClass("is-selected", isSelectedModel);
+
+    const modelRowEl = modelEl.createEl("button", {
+      cls: "agent-dashboard__agent-picker-option agent-dashboard__agent-picker-option--model",
+      type: "button"
+    });
+    modelRowEl.toggleClass("is-selected", isSelectedModel);
+    modelRowEl.createSpan({
+      cls: "agent-dashboard__agent-picker-option-label",
+      text: getShortModelLabel(model.label)
+    });
+    setIcon(
+      modelRowEl.createSpan({ cls: "agent-dashboard__agent-picker-caret" }),
+      "chevron-right"
+    );
+    modelRowEl.addEventListener("click", () => {
+      void plugin.selectPiModel(model.label);
+    });
+
+    const submenuEl = modelEl.createDiv({
+      cls: "agent-dashboard__agent-picker-submenu"
+    });
+    const applyPair = async (profilePath: string): Promise<void> => {
+      await plugin.selectSidekickProfile(profilePath);
+      await plugin.selectPiModel(model.label);
+    };
+
+    const noneOptionEl = submenuEl.createEl("button", {
+      cls: "agent-dashboard__agent-picker-option",
+      type: "button"
+    });
+    noneOptionEl.toggleClass("is-selected", isSelectedModel && !selectedProfile);
+    noneOptionEl.createSpan({
+      cls: "agent-dashboard__agent-picker-option-label",
+      text: "No profile / default"
+    });
+    noneOptionEl.addEventListener("click", () => {
+      void applyPair("");
+    });
+
+    for (const profile of profiles) {
+      const optionEl = submenuEl.createEl("button", {
+        cls: "agent-dashboard__agent-picker-option",
+        type: "button"
+      });
+      optionEl.toggleClass(
+        "is-selected",
+        isSelectedModel && selectedProfile?.path === profile.path
+      );
+      optionEl.createSpan({
+        cls: "agent-dashboard__agent-picker-option-label",
+        text: profile.name
+      });
+      optionEl.addEventListener("click", () => {
+        void applyPair(profile.path);
+      });
+    }
+  }
+}
+
+function renderPipelineIndicator(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement
+): void {
+  const running = plugin.bridge.getSnapshot().status === "running";
+  const ready = plugin.piRpcDiscoverySnapshot.status === "ready";
+  const indicatorEl = containerEl.createDiv({
+    cls: "agent-dashboard__topbar-title"
+  });
+  const dotEl = indicatorEl.createSpan({ cls: "agent-dashboard__pipeline-dot" });
+  dotEl.toggleClass("is-running", running && ready);
+  dotEl.toggleClass("is-partial", running !== ready);
+
+  const model = getCurrentModelLabel(plugin);
+  indicatorEl.createSpan({
+    cls: "agent-dashboard__pipeline-label",
+    text:
+      running && ready
+        ? model
+          ? getShortModelLabel(model)
+          : "ready"
+        : running
+          ? "bridge only"
+          : "stopped"
+  });
+}
+
+function renderMenuDropdown(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const menuEl = containerEl.createDiv({ cls: "agent-dashboard__menu" });
+
+  const statusSection = menuEl.createDiv({ cls: "agent-dashboard__menu-section" });
+  const statusHeadingEl = statusSection.createDiv({
+    cls: "agent-dashboard__menu-heading"
+  });
+  statusHeadingEl.createEl("h4", { text: "Status" });
+  const statusControlsEl = statusHeadingEl.createDiv({
+    cls: "agent-dashboard__panel-controls"
+  });
+  new ButtonComponent(statusControlsEl)
+    .setButtonText("Recheck")
+    .setTooltip("Re-run the full start pipeline")
+    .onClick(async () => {
+      await plugin.startPipeline();
+      renderDashboardShell(plugin, containerEl, options);
+    });
+  const listEl = statusSection.createDiv({ cls: "agent-dashboard__status-list" });
+  renderStatusList(plugin, listEl, options);
+}
+
+function renderStatusList(
+  plugin: AgentDashboardPlugin,
+  listEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  renderBridgeStatusItem(listEl, plugin.bridge.getSnapshot());
   renderPiStatusItems(listEl, plugin.piSnapshot);
   renderPiRpcStatusItems(listEl, plugin.piRpcDiscoverySnapshot);
   renderOllamaStatusItems(listEl, plugin.ollamaSnapshot);
@@ -156,140 +336,6 @@ function renderStatusPanel(
   );
   renderStatusItem(listEl, "Workspace", options.workspace ?? "vault");
   renderStatusItem(listEl, "Session", plugin.getAgentSessionSummary());
-
-  return panelEl;
-}
-
-function renderPanelResizeHandle(
-  plugin: AgentDashboardPlugin,
-  containerEl: HTMLElement,
-  statusPanelEl: HTMLElement
-): void {
-  const handleEl = containerEl.createDiv({
-    cls: "agent-dashboard__panel-resize-handle"
-  });
-  handleEl.setAttr("role", "separator");
-  handleEl.setAttr("aria-orientation", "horizontal");
-  handleEl.setAttr("aria-label", "Resize status and agent panels");
-  handleEl.setAttr("tabindex", "0");
-  handleEl.setAttr("title", "Drag to resize Status and Agent panels");
-  updateResizeHandleValue(handleEl, plugin.settings.statusPanelHeight, containerEl);
-
-  handleEl.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = statusPanelEl.getBoundingClientRect().height;
-    const ownerDocument = handleEl.ownerDocument;
-    containerEl.addClass("is-resizing-panels");
-
-    const updateHeight = (clientY: number): void => {
-      const nextHeight = clampStatusPanelHeight(
-        startHeight + clientY - startY,
-        getMaxStatusPanelHeight(containerEl)
-      );
-      setStatusPanelHeight(statusPanelEl, nextHeight);
-      plugin.settings.statusPanelHeight = Math.round(nextHeight);
-      updateResizeHandleValue(handleEl, nextHeight, containerEl);
-    };
-
-    const onPointerMove = (moveEvent: PointerEvent): void => {
-      moveEvent.preventDefault();
-      updateHeight(moveEvent.clientY);
-    };
-
-    const stopResize = (): void => {
-      ownerDocument.removeEventListener("pointermove", onPointerMove);
-      ownerDocument.removeEventListener("pointerup", stopResize);
-      ownerDocument.removeEventListener("pointercancel", stopResize);
-      containerEl.removeClass("is-resizing-panels");
-      void plugin.saveSettings();
-    };
-
-    ownerDocument.addEventListener("pointermove", onPointerMove);
-    ownerDocument.addEventListener("pointerup", stopResize);
-    ownerDocument.addEventListener("pointercancel", stopResize);
-  });
-
-  handleEl.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
-      return;
-    }
-
-    event.preventDefault();
-    const direction = event.key === "ArrowDown" ? 1 : -1;
-    const nextHeight = clampStatusPanelHeight(
-      plugin.settings.statusPanelHeight + direction * PANEL_RESIZE_KEY_STEP,
-      getMaxStatusPanelHeight(containerEl)
-    );
-    plugin.settings.statusPanelHeight = Math.round(nextHeight);
-    setStatusPanelHeight(statusPanelEl, nextHeight);
-    updateResizeHandleValue(handleEl, nextHeight, containerEl);
-    void plugin.saveSettings();
-  });
-
-  handleEl.addEventListener("dblclick", () => {
-    const nextHeight = clampStatusPanelHeight(
-      160,
-      getMaxStatusPanelHeight(containerEl)
-    );
-    plugin.settings.statusPanelHeight = Math.round(nextHeight);
-    setStatusPanelHeight(statusPanelEl, nextHeight);
-    updateResizeHandleValue(handleEl, nextHeight, containerEl);
-    void plugin.saveSettings();
-  });
-}
-
-function setStatusPanelHeight(
-  panelEl: HTMLElement,
-  height: number,
-  maxHeight = STATUS_PANEL_MAX_HEIGHT
-): void {
-  const nextHeight = clampStatusPanelHeight(height, maxHeight);
-  panelEl.style.flexBasis = nextHeight + "px";
-  panelEl.style.height = nextHeight + "px";
-}
-
-function updateResizeHandleValue(
-  handleEl: HTMLElement,
-  height: number,
-  containerEl: HTMLElement
-): void {
-  handleEl.setAttr("aria-valuemin", String(STATUS_PANEL_MIN_HEIGHT));
-  handleEl.setAttr("aria-valuemax", String(getMaxStatusPanelHeight(containerEl)));
-  handleEl.setAttr("aria-valuenow", String(Math.round(height)));
-}
-
-function getMaxStatusPanelHeight(containerEl: HTMLElement): number {
-  const containerHeight = containerEl.getBoundingClientRect().height;
-  if (!Number.isFinite(containerHeight) || containerHeight <= 0) {
-    return STATUS_PANEL_MAX_HEIGHT;
-  }
-
-  const availableHeight = Math.floor(
-    containerHeight - AGENT_PANEL_MIN_HEIGHT - 24
-  );
-  return Math.max(
-    STATUS_PANEL_MIN_HEIGHT,
-    Math.min(STATUS_PANEL_MAX_HEIGHT, availableHeight)
-  );
-}
-
-function clampStatusPanelHeight(
-  height: number,
-  maxHeight = STATUS_PANEL_MAX_HEIGHT
-): number {
-  if (!Number.isFinite(height)) {
-    return 160;
-  }
-
-  return Math.min(
-    maxHeight,
-    Math.max(STATUS_PANEL_MIN_HEIGHT, Math.round(height))
-  );
 }
 
 function renderBridgeStatusItem(
@@ -467,38 +513,30 @@ function renderAgentPanel(
   const panelEl = containerEl.createDiv({
     cls: "agent-dashboard__panel agent-dashboard__panel--agent"
   });
-  const headingEl = panelEl.createDiv({ cls: "agent-dashboard__panel-heading" });
-
   const rootEl = containerEl.parentElement ?? containerEl;
-  if (plugin.agentViewMode === "chat") {
-    const titleEl = headingEl.createDiv({
-      cls: "agent-dashboard__chat-title"
-    });
-    new ButtonComponent(titleEl)
-      .setIcon("arrow-left")
-      .setTooltip("Back to sessions")
-      .onClick(() => {
-        void plugin.showAgentHistory();
-        renderDashboardShell(plugin, rootEl, options);
-    });
-    titleEl.createEl("h4", { text: "Agent" });
-    renderCurrentAgentProfilePill(plugin, titleEl);
-    renderCurrentModelPill(plugin, titleEl);
-  } else {
-    headingEl.createEl("h4", { text: "Sessions" });
-  }
-
-  const controlsEl = headingEl.createDiv({
-    cls: "agent-dashboard__panel-controls"
-  });
-
-  renderAgentProfileSelector(plugin, panelEl, rootEl, options);
-  renderModelSelector(plugin, panelEl, rootEl, options);
 
   if (plugin.agentViewMode === "history") {
     renderAgentHistoryPage(plugin, panelEl, rootEl, options);
     return;
   }
+
+  const headingEl = panelEl.createDiv({ cls: "agent-dashboard__panel-heading" });
+  const titleEl = headingEl.createDiv({
+    cls: "agent-dashboard__chat-title"
+  });
+  new ButtonComponent(titleEl)
+    .setIcon("arrow-left")
+    .setTooltip("Back to chats")
+    .onClick(() => {
+      void plugin.showAgentHistory();
+    });
+  titleEl.createEl("h4", { text: "Chat" });
+  renderCurrentAgentProfilePill(plugin, titleEl);
+  renderCurrentModelPill(plugin, titleEl);
+
+  const controlsEl = headingEl.createDiv({
+    cls: "agent-dashboard__panel-controls"
+  });
 
   if (plugin.agentSessionStatus === "running") {
     new ButtonComponent(controlsEl)
@@ -978,24 +1016,14 @@ function renderSessionHistoryItem(
     },
     cls: "agent-dashboard__session-item"
   });
-  itemEl.createDiv({
+  itemEl.createSpan({
     cls: "agent-dashboard__session-title",
     text: session.title
   });
-  itemEl.createDiv({
-    cls: "agent-dashboard__session-excerpt",
-    text: session.lastMessage || "No messages yet."
+  itemEl.createSpan({
+    cls: "agent-dashboard__session-date",
+    text: formatSessionDate(session.updatedAt)
   });
-  const metaEl = itemEl.createDiv({
-    cls: "agent-dashboard__session-meta"
-  });
-  metaEl.createSpan({ text: formatSessionDate(session.updatedAt) });
-  if (session.messageCount !== undefined) {
-    metaEl.createSpan({ text: `${session.messageCount} messages` });
-  }
-  if (session.piSessionId) {
-    metaEl.createSpan({ text: session.piSessionId.slice(0, 8) });
-  }
 
   const openSession = (): void => {
     void plugin.openAgentSession(session.name);

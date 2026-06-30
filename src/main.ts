@@ -1014,6 +1014,33 @@ export default class AgentDashboardPlugin extends Plugin {
     new Notice(`Pi RPC discovery failed: ${this.piRpcDiscoverySnapshot.error}`);
   }
 
+  async startPipeline(): Promise<void> {
+    // Boot the full local pipeline behind one action: check Ollama, probe Pi,
+    // discover the RPC models, start the bridge, then activate a model.
+    await this.refreshOllamaStatus(false);
+    await this.refreshPiStatus(false);
+    await this.refreshPiRpcDiscovery(false);
+    this.selectDefaultPiModelIfNeeded();
+
+    if (this.bridge.getSnapshot().status === "running") {
+      await this.bridge.restart();
+    } else {
+      await this.bridge.start();
+    }
+
+    const model = this.settings.selectedPiModel;
+    if (model && this.agentSessionStatus !== "running") {
+      await this.selectPiModel(model);
+    }
+
+    new Notice(
+      this.piRpcDiscoverySnapshot.status === "ready"
+        ? `Sidekick started${model ? ` with ${model}` : ""}.`
+        : "Sidekick start incomplete — check the status menu."
+    );
+    this.refreshDashboardViews();
+  }
+
   async sendAgentPrompt(
     prompt: string,
     contextMode: AgentPromptContextMode = "none"

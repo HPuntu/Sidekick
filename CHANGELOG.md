@@ -1,14 +1,13 @@
 ## Unreleased
 
-- Collapse tool-use events by default behind expandable `Tool used: <tool>` cards in the chat stream.
+### Added
 
-### Fixed
-
-- Launch Pi with `PI_SKIP_VERSION_CHECK` so an expired startup version-check cache no longer surfaces as an offline error when running fully offline.
+- One-click Start/Stop pipeline: checks Ollama, probes Pi, discovers RPC models, starts the bridge, and activates the selected model.
 
 ### Changed
 
-- Update README with accurate (not-yet-in-store) install instructions and a Troubleshooting section covering the offline error and offline model selection.
+- Redesign the sidebar into a single clean view — top bar with a status menu, a combined model/agent-profile picker (profiles cascade from each model), and a Start/Stop button; recent chats stacked above a pinned chat input.
+- Slim recent-chat rows to a single line showing only the title and date.
 
 ## 0.1.10 - 2026-05-29
 
