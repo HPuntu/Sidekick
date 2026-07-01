@@ -488,7 +488,7 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = await this.loadData();
+    const data: unknown = await this.loadData();
     const settings = getPersistedSettings(data);
     this.settings = normalizeSettings(
       Object.assign({}, DEFAULT_SETTINGS, settings)
@@ -3174,7 +3174,7 @@ function getPersistedSettings(data: unknown): Partial<AgentDashboardSettings> {
     return record.settings as Partial<AgentDashboardSettings>;
   }
 
-  return record as Partial<AgentDashboardSettings>;
+  return record;
 }
 
 function getPersistedAgentSession(
@@ -3182,7 +3182,7 @@ function getPersistedAgentSession(
 ): PersistedAgentSessionState | undefined {
   const record = asPlainRecord(data);
   const session = asPlainRecord(record?.agentSession);
-  return session as PersistedAgentSessionState | undefined;
+  return session;
 }
 
 function getPersistedAgentSessions(
@@ -3190,7 +3190,7 @@ function getPersistedAgentSessions(
 ): PersistedAgentSessionsState | undefined {
   const record = asPlainRecord(data);
   const sessions = asPlainRecord(record?.agentSessions);
-  return sessions as PersistedAgentSessionsState | undefined;
+  return sessions;
 }
 
 function isPersistedAgentSessionRecord(

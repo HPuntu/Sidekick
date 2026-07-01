@@ -204,7 +204,7 @@ function requestJson<T>(
           try {
             resolve(JSON.parse(body) as T);
           } catch (error) {
-            reject(error);
+            reject(error instanceof Error ? error : new Error(String(error)));
           }
         });
       }

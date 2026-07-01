@@ -294,8 +294,8 @@ function getRegexRanges(
   return [...text.matchAll(pattern)]
     .filter((match) => match.index !== undefined)
     .map((match) => ({
-      end: match.index! + match[0].length,
-      start: match.index!
+      end: match.index + match[0].length,
+      start: match.index
     }));
 }
 

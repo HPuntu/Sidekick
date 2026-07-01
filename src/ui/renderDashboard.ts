@@ -1894,8 +1894,8 @@ function renderReferencedFiles(
       text: file.path,
       type: "button"
     });
-    fileEl.addEventListener("click", async () => {
-      await plugin.app.workspace.getLeaf(false).openFile(file);
+    fileEl.addEventListener("click", () => {
+      void plugin.app.workspace.getLeaf(false).openFile(file);
     });
   }
 }

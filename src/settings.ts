@@ -60,8 +60,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Local Sidekick").setHeading();
-
     new Setting(containerEl)
       .setName("Start bridge automatically")
       .setDesc("Start the local health stub when Obsidian loads the plugin.")
