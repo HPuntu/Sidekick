@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 0.2.4 - 2026-07-02
+
+- Merge remote-tracking branch 'origin/main' (0ec4d78)
+- fixed tool action blocked notifications showing even when not blocked (29f8b63)
+
 ## 0.2.3 - 2026-07-02
 
 - Merge remote-tracking branch 'origin/main' (92e25aa)
