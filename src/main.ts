@@ -2707,6 +2707,12 @@ export default class AgentDashboardPlugin extends Plugin {
           this.refreshDashboardViews();
         },
         onToolEvent: (event) => {
+          if (toolMode === "read-only" && isReadOnlyPiToolEvent(event)) {
+            this.addToolEvent(createPiToolEvent(event));
+            this.refreshDashboardViews();
+            return;
+          }
+
           const decision = this.assessSafetyRequest({
             description: event.title,
             kind: "shell"
@@ -2907,6 +2913,26 @@ function getEditProposalInstructions(): string {
     "Do not claim that edits have been applied. The dashboard will show a diff and require approval.",
     "</local-sidekick-edit-format>"
   ].join("\n");
+}
+
+const READ_ONLY_PI_TOOL_NAMES = new Set(["find", "grep", "ls", "read"]);
+
+function isReadOnlyPiToolEvent(event: PiToolEvent): boolean {
+  const toolName = event.name?.trim().toLowerCase();
+  return toolName !== undefined && READ_ONLY_PI_TOOL_NAMES.has(toolName);
+}
+
+function createPiToolEvent(event: PiToolEvent): AgentToolEvent {
+  return {
+    callId: event.callId,
+    eventType: event.eventType,
+    input: event.input,
+    name: event.name,
+    output: event.output,
+    raw: event.raw,
+    status: event.status,
+    title: event.title
+  };
 }
 
 function createBlockedToolEvent(event: PiToolEvent): AgentToolEvent {
