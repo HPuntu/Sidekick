@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 0.2.2 - 2026-07-01
+
+- Merge remote-tracking branch 'origin/main' (f8f6998)
+- chore: remove stray manifest.jsony (9a8c130)
+- fix: address second Obsidian review (settings heading + lint warnings) (b6a769b)
+
 ## 0.2.1 - 2026-06-30
 
 ### Fixed
