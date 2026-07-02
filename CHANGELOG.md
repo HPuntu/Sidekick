@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 0.2.3 - 2026-07-02
+
+- Merge remote-tracking branch 'origin/main' (92e25aa)
+- some dropdown model election box fixes (a321aa6)
+
 ## 0.2.2 - 2026-07-01
 
 - Merge remote-tracking branch 'origin/main' (f8f6998)
