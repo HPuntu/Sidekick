@@ -22,6 +22,7 @@ export interface DashboardRenderOptions {
 const openToolEventIds = new Set<string>();
 let menuOpen = false;
 let agentPickerOpen = false;
+let expandedModelLabel: string | null = null;
 let markdownComponent: Component | undefined;
 
 function getMarkdownRenderComponent(): Component {
@@ -47,10 +48,6 @@ export function renderDashboardShell(
     renderEmbeddedShell(plugin, containerEl, options);
     return;
   }
-
-  markdownComponent?.unload();
-  markdownComponent = new Component();
-  markdownComponent.load();
 
   renderTopBar(plugin, containerEl, options);
   if (menuOpen) {
@@ -162,6 +159,33 @@ function renderAgentPickerToggle(
   });
 }
 
+// Pi's RPC discovery only lists models configured in Pi, but Pi can run any
+// model the local Ollama server has via `ollama/<name>`. Merge both so every
+// local model is selectable, not just the ones Pi happens to pre-list.
+function collectPickerModels(
+  plugin: AgentDashboardPlugin
+): PiRpcDiscoverySnapshot["models"] {
+  const seen = new Set<string>();
+  const merged: PiRpcDiscoverySnapshot["models"] = [];
+
+  for (const model of plugin.piRpcDiscoverySnapshot.models) {
+    if (!seen.has(model.label)) {
+      seen.add(model.label);
+      merged.push(model);
+    }
+  }
+
+  for (const model of plugin.ollamaSnapshot.models) {
+    const label = `ollama/${model.name}`;
+    if (!seen.has(label)) {
+      seen.add(label);
+      merged.push({ label });
+    }
+  }
+
+  return merged;
+}
+
 function renderAgentPickerPopover(
   plugin: AgentDashboardPlugin,
   barEl: HTMLElement,
@@ -197,7 +221,7 @@ function renderAgentPickerPopover(
       renderDashboardShell(plugin, rootEl, options);
     });
 
-  const models = plugin.getSelectablePiModels();
+  const models = collectPickerModels(plugin);
   if (models.length === 0) {
     popoverEl.createDiv({
       cls: "agent-dashboard__agent-picker-empty",
@@ -215,34 +239,60 @@ function renderAgentPickerPopover(
 
   for (const model of models) {
     const isSelectedModel = model.label === modelLabel;
+    const isExpanded = expandedModelLabel === model.label;
     const modelEl = popoverEl.createDiv({
       cls: "agent-dashboard__agent-picker-model"
     });
     modelEl.toggleClass("is-selected", isSelectedModel);
+    modelEl.toggleClass("is-expanded", isExpanded);
 
-    const modelRowEl = modelEl.createEl("button", {
+    const rowEl = modelEl.createDiv({
+      cls: "agent-dashboard__agent-picker-model-row"
+    });
+
+    const labelEl = rowEl.createEl("button", {
       cls: "agent-dashboard__agent-picker-option agent-dashboard__agent-picker-option--model",
       type: "button"
     });
-    modelRowEl.toggleClass("is-selected", isSelectedModel);
-    modelRowEl.createSpan({
+    labelEl.toggleClass("is-selected", isSelectedModel);
+    labelEl.createSpan({
       cls: "agent-dashboard__agent-picker-option-label",
       text: getShortModelLabel(model.label)
     });
-    setIcon(
-      modelRowEl.createSpan({ cls: "agent-dashboard__agent-picker-caret" }),
-      "chevron-right"
-    );
-    modelRowEl.addEventListener("click", () => {
+    labelEl.addEventListener("click", () => {
+      agentPickerOpen = false;
       void plugin.selectPiModel(model.label);
+      renderDashboardShell(plugin, rootEl, options);
     });
+
+    const caretEl = rowEl.createEl("button", {
+      attr: { "aria-label": isExpanded ? "Hide profiles" : "Choose a profile" },
+      cls: "agent-dashboard__agent-picker-caret-button",
+      type: "button"
+    });
+    setIcon(
+      caretEl.createSpan({ cls: "agent-dashboard__agent-picker-caret" }),
+      isExpanded ? "chevron-down" : "chevron-right"
+    );
+    caretEl.addEventListener("click", () => {
+      expandedModelLabel = isExpanded ? null : model.label;
+      renderDashboardShell(plugin, rootEl, options);
+    });
+
+    if (!isExpanded) {
+      continue;
+    }
 
     const submenuEl = modelEl.createDiv({
       cls: "agent-dashboard__agent-picker-submenu"
     });
-    const applyPair = async (profilePath: string): Promise<void> => {
-      await plugin.selectSidekickProfile(profilePath);
-      await plugin.selectPiModel(model.label);
+    const applyPair = (profilePath: string): void => {
+      agentPickerOpen = false;
+      void (async () => {
+        await plugin.selectSidekickProfile(profilePath);
+        await plugin.selectPiModel(model.label);
+      })();
+      renderDashboardShell(plugin, rootEl, options);
     };
 
     const noneOptionEl = submenuEl.createEl("button", {
@@ -255,7 +305,7 @@ function renderAgentPickerPopover(
       text: "No profile / default"
     });
     noneOptionEl.addEventListener("click", () => {
-      void applyPair("");
+      applyPair("");
     });
 
     for (const profile of profiles) {
@@ -272,7 +322,7 @@ function renderAgentPickerPopover(
         text: profile.name
       });
       optionEl.addEventListener("click", () => {
-        void applyPair(profile.path);
+        applyPair(profile.path);
       });
     }
   }

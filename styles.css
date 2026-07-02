@@ -290,23 +290,39 @@
   flex-direction: column;
 }
 
+.agent-dashboard__agent-picker-model-row {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+}
+
+.agent-dashboard__agent-picker-model-row .agent-dashboard__agent-picker-option--model {
+  flex: 1 1 auto;
+}
+
+.agent-dashboard__agent-picker-caret-button {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--agent-dashboard-muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 6px;
+}
+
+.agent-dashboard__agent-picker-caret-button:hover {
+  background: var(--background-modifier-hover);
+}
+
 .agent-dashboard__agent-picker-submenu {
   border-left: 1px solid var(--agent-dashboard-border);
-  display: none;
+  display: flex;
   flex-direction: column;
   gap: 2px;
   margin: 2px 0 6px 16px;
   padding-left: 6px;
-}
-
-.agent-dashboard__agent-picker-model:hover > .agent-dashboard__agent-picker-submenu,
-.agent-dashboard__agent-picker-model.is-selected > .agent-dashboard__agent-picker-submenu {
-  display: flex;
-}
-
-.agent-dashboard__agent-picker-model:hover .agent-dashboard__agent-picker-caret,
-.agent-dashboard__agent-picker-model.is-selected .agent-dashboard__agent-picker-caret {
-  transform: rotate(90deg);
 }
 
 .agent-dashboard__body {

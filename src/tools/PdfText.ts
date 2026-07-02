@@ -138,6 +138,12 @@ function extractTextFromContentStream(value: string): string {
   return blocks.join("\n");
 }
 
+// In a TJ array, a number after a string adjusts the next glyph position
+// (thousandths of an em, subtracted from the x position). A sufficiently
+// negative value shifts the following text right — i.e. a word space. LaTeX
+// PDFs encode inter-word spaces this way, so without it every word runs together.
+const TJ_SPACE_THRESHOLD = 100;
+
 function extractPdfStrings(value: string): string {
   const parts: string[] = [];
   let index = 0;
@@ -148,7 +154,7 @@ function extractPdfStrings(value: string): string {
       const parsed = readLiteralString(value, index);
       if (parsed) {
         parts.push(parsed.text);
-        index = parsed.end;
+        index = consumeTjAdjustment(value, parsed.end, parts);
         continue;
       }
     }
@@ -157,7 +163,7 @@ function extractPdfStrings(value: string): string {
       const parsed = readHexString(value, index);
       if (parsed) {
         parts.push(parsed.text);
-        index = parsed.end;
+        index = consumeTjAdjustment(value, parsed.end, parts);
         continue;
       }
     }
@@ -172,6 +178,28 @@ function extractPdfStrings(value: string): string {
   }
 
   return parts.join("");
+}
+
+function consumeTjAdjustment(
+  value: string,
+  index: number,
+  parts: string[]
+): number {
+  let cursor = index;
+  while (cursor < value.length && /\s/.test(value[cursor])) {
+    cursor += 1;
+  }
+
+  const match = value.slice(cursor, cursor + 24).match(/^-?\d+(?:\.\d+)?/);
+  if (!match) {
+    return index;
+  }
+
+  if (Number.parseFloat(match[0]) <= -TJ_SPACE_THRESHOLD) {
+    parts.push(" ");
+  }
+
+  return cursor + match[0].length;
 }
 
 function readLiteralString(
