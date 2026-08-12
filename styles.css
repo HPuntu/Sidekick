@@ -1,17 +1,32 @@
+/*
+ * Surfaces are built from Obsidian's semantic variables only, so themes and
+ * light/dark both follow automatically.
+ *
+ *   base    the sidebar itself, matched to the note background so the panel
+ *           reads as a continuation of the workspace rather than a grey slab
+ *   raised  cards that should lift off the base (messages, tool cards)
+ *   sunken  wells that should recede (the composer, code, inputs)
+ */
 .agent-dashboard {
   --agent-dashboard-border: var(--background-modifier-border);
   --agent-dashboard-muted: var(--text-muted);
-  --agent-dashboard-panel: var(--background-secondary);
-  --agent-dashboard-panel-alt: var(--background-primary);
+  --agent-dashboard-base: var(--background-primary);
+  --agent-dashboard-raised: var(--background-primary-alt, var(--background-primary));
+  --agent-dashboard-sunken: var(--background-secondary);
 
+  /* Retained for rules that predate the surface system. */
+  --agent-dashboard-panel: transparent;
+  --agent-dashboard-panel-alt: var(--agent-dashboard-raised);
+
+  background: var(--agent-dashboard-base);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   height: 100%;
   min-height: 320px;
   overflow: hidden;
-  padding: 12px;
+  padding: 10px;
   user-select: text;
   -webkit-user-select: text;
 }
@@ -22,10 +37,13 @@
   box-sizing: border-box;
 }
 
+/* Embedded in a note, which already supplies the base surface. */
 .agent-dashboard--embedded {
+  background: transparent;
   border: 1px solid var(--agent-dashboard-border);
-  border-radius: 8px;
-  background: var(--background-primary);
+  border-radius: 10px;
+  /* Set as a custom property by renderDashboardShell from settings. */
+  min-height: var(--sidekick-compact-block-height, 0px);
 }
 
 .agent-dashboard--standalone {
@@ -82,14 +100,35 @@
   gap: 6px;
 }
 
+/* Config and Chats at the left, Start/Kill at the right, model picker filling
+   whatever space is left between them. */
 .agent-dashboard__topbar-row {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
 .agent-dashboard__menu-toggle {
+  background: transparent;
+  border: 1px solid var(--agent-dashboard-border);
+  box-shadow: none;
+  color: var(--agent-dashboard-muted);
   flex: 0 0 auto;
+  font-size: var(--font-ui-smaller);
+  height: 28px;
+  padding: 0 9px;
+}
+
+.agent-dashboard__menu-toggle:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.agent-dashboard__menu-toggle.is-active {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+  color: var(--text-normal);
 }
 
 .agent-dashboard__menu-toggle.is-active {
@@ -137,6 +176,22 @@
   height: 28px;
 }
 
+/* Green while the pipeline is down and ready to boot. */
+.agent-dashboard__start-button.is-start.is-start {
+  background: var(--color-green, #3fa66a);
+  color: var(--text-on-accent);
+}
+
+/* Red once it is up, because tearing it down is destructive. */
+.agent-dashboard__start-button.is-kill.is-kill {
+  background: var(--color-red, #c4554d);
+  color: var(--text-on-accent);
+}
+
+.agent-dashboard__start-button:hover {
+  filter: brightness(1.1);
+}
+
 .agent-dashboard__menu {
   background: var(--agent-dashboard-panel-alt);
   border: 1px solid var(--agent-dashboard-border);
@@ -171,7 +226,7 @@
 
 .agent-dashboard__agent-picker-toggle {
   align-items: center;
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 6px;
   color: var(--text-normal);
@@ -334,57 +389,23 @@
   overflow: hidden;
 }
 
+/* A layout container, not a card. Nesting a box of the same grey inside the
+   sidebar made the chat look boxed-in; elevation lives on the messages. */
 .agent-dashboard__panel {
-  background: var(--agent-dashboard-panel);
-  border: 1px solid var(--agent-dashboard-border);
-  border-radius: 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-height: 132px;
   min-width: 0;
-  padding: 10px;
-}
-
-.agent-dashboard__panel--status {
-  background: var(--agent-dashboard-panel-alt);
-  flex: 0 0 160px;
-  max-height: none;
-  min-height: 96px;
-  overflow: hidden;
+  padding: 0;
 }
 
 .agent-dashboard__panel--agent {
   flex: 1 1 auto;
   min-height: 220px;
-}
-
-.agent-dashboard__panel-resize-handle {
-  cursor: row-resize;
-  flex: 0 0 10px;
-  margin: -4px 0;
-  outline: none;
-  position: relative;
-}
-
-.agent-dashboard__panel-resize-handle::before {
-  background: var(--agent-dashboard-border);
-  border-radius: 999px;
-  content: "";
-  height: 2px;
-  left: 36%;
-  position: absolute;
-  right: 36%;
-  top: 4px;
-  transition: background-color 120ms ease, left 120ms ease, right 120ms ease;
-}
-
-.agent-dashboard__panel-resize-handle:hover::before,
-.agent-dashboard__panel-resize-handle:focus-visible::before,
-.agent-dashboard__body.is-resizing-panels .agent-dashboard__panel-resize-handle::before {
-  background: var(--interactive-accent);
-  left: 28%;
-  right: 28%;
 }
 
 .agent-dashboard__body.is-resizing-panels,
@@ -434,7 +455,7 @@
 
 .agent-dashboard__chat-model-pill {
   align-items: center;
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 999px;
   color: var(--agent-dashboard-muted);
@@ -519,7 +540,7 @@
 }
 
 .agent-dashboard__agent-profile-select {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 6px;
   color: var(--text-normal);
@@ -566,7 +587,7 @@
 
 .agent-dashboard__model-current {
   align-items: center;
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 999px;
   color: var(--text-normal);
@@ -579,7 +600,7 @@
 
 .agent-dashboard__chat-agent-pill {
   align-items: center;
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 999px;
   color: var(--text-normal);
@@ -628,7 +649,7 @@
 
 .agent-dashboard__model-chip {
   align-items: center;
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 999px;
   color: var(--text-normal);
@@ -726,19 +747,48 @@
   padding-inline: 8px;
 }
 
+/* Hugs its content so a short list sits at the top and leaves the rest of the
+   panel empty, rather than stretching to fill it. The side inset lets the
+   background show around the rows instead of them meeting the sidebar edge. */
 .agent-dashboard__session-list {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
   overflow-y: auto;
-  padding: 1px 2px 2px 0;
+  padding: 1px 6px 2px;
+}
+
+/* Inside the Chats dropdown the list scrolls rather than growing the bar. */
+.agent-dashboard__session-list--scroll {
+  max-height: 320px;
+}
+
+.agent-dashboard__menu--chats {
+  gap: 8px;
+}
+
+.agent-dashboard__session-more {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--agent-dashboard-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+  padding: 4px 2px;
+  text-align: left;
+  width: fit-content;
+}
+
+.agent-dashboard__session-more:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
 }
 
 .agent-dashboard__session-item {
   align-items: center;
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
   color: var(--text-normal);
@@ -799,7 +849,7 @@
 }
 
 .agent-dashboard__approval-card {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
   display: flex;
@@ -870,21 +920,26 @@
 }
 
 .agent-dashboard__event {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
-  border-radius: 8px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px;
+  padding: 9px 11px;
 }
 
+/* The user's own turns are marked by an accent edge rather than a fill, so
+   the colour survives any theme without fighting its palette. */
 .agent-dashboard__event--user {
-  border-color: var(--interactive-accent);
+  background: transparent;
+  border-color: var(--agent-dashboard-border);
+  border-left: 2px solid var(--interactive-accent);
+  border-radius: 4px 10px 10px 4px;
 }
 
 .agent-dashboard__event--assistant {
-  background: var(--background-secondary);
+  background: var(--agent-dashboard-raised);
 }
 
 .agent-dashboard__event-meta {
@@ -952,8 +1007,67 @@
   color: var(--text-accent-hover, var(--text-accent));
 }
 
+/* Collapsed summary for a run of tool steps. Deliberately smaller and quieter
+   than a message, since it is provenance rather than content. */
+.agent-dashboard__tool-group {
+  background: transparent;
+  border: 1px solid var(--agent-dashboard-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.agent-dashboard__tool-group.has-warning {
+  border-color: var(--color-red, #c4554d);
+}
+
+.agent-dashboard__tool-group-header {
+  align-items: center;
+  color: var(--agent-dashboard-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--font-ui-smaller);
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 8px;
+}
+
+.agent-dashboard__tool-group-header:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.agent-dashboard__tool-group-disclosure {
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
+.agent-dashboard__tool-group-icon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.agent-dashboard__tool-group-icon svg {
+  height: 12px;
+  width: 12px;
+}
+
+.agent-dashboard__tool-group-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-dashboard__tool-group-body {
+  border-top: 1px solid var(--agent-dashboard-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
 .agent-dashboard__tool-card {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
   display: block;
@@ -1146,7 +1260,7 @@
 }
 
 .agent-dashboard__referenced-file {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 6px;
   color: var(--text-accent);
@@ -1178,7 +1292,7 @@
 }
 
 .agent-dashboard__proposed-edit {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-raised);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
   display: flex;
@@ -1305,21 +1419,179 @@
   padding-top: 10px;
 }
 
-.agent-dashboard__prompt-input {
-  background: var(--background-primary);
-  border: 1px solid var(--agent-dashboard-border);
+.agent-dashboard__composer-spacer {
+  flex: 1 1 auto;
+}
+
+/* Icon-only composer actions. Colour is carried by the glyph at rest and
+   fills the button on hover, so the row stays quiet until you reach for it. */
+.agent-dashboard__icon-button.agent-dashboard__icon-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+  color: var(--agent-dashboard-action, var(--text-muted));
+  cursor: pointer;
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  min-width: 30px;
+  padding: 0 7px;
+  transition: background-color 120ms ease, color 120ms ease,
+    border-color 120ms ease;
+}
+
+.agent-dashboard__icon-button .svg-icon {
+  height: 16px;
+  width: 16px;
+}
+
+.agent-dashboard__icon-button:hover:not(:disabled) {
+  background: var(--agent-dashboard-action, var(--interactive-accent));
+  border-color: var(--agent-dashboard-action, var(--interactive-accent));
+  color: var(--text-on-accent);
+}
+
+.agent-dashboard__icon-button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.agent-dashboard__icon-button--note {
+  --agent-dashboard-action: var(--color-blue, #4c8bf5);
+}
+
+.agent-dashboard__icon-button--selection {
+  --agent-dashboard-action: var(--color-purple, #9c6ade);
+}
+
+.agent-dashboard__icon-button--vault {
+  --agent-dashboard-action: var(--color-green, #3fa66a);
+}
+
+.agent-dashboard__icon-button--links {
+  --agent-dashboard-action: var(--color-orange, #d98634);
+}
+
+.agent-dashboard__icon-button--queue {
+  --agent-dashboard-action: var(--color-yellow, #c9a227);
+}
+
+/* Send and Stop are the primary actions, so they read as filled by default. */
+.agent-dashboard__icon-button--send.agent-dashboard__icon-button--send,
+.agent-dashboard__icon-button--stop.agent-dashboard__icon-button--stop {
+  background: var(--agent-dashboard-action);
+  border-color: var(--agent-dashboard-action);
+  color: var(--text-on-accent);
+}
+
+.agent-dashboard__icon-button--send {
+  --agent-dashboard-action: var(--interactive-accent);
+}
+
+.agent-dashboard__icon-button--stop {
+  --agent-dashboard-action: var(--color-red, #c4554d);
+}
+
+.agent-dashboard__icon-button--send:hover:not(:disabled),
+.agent-dashboard__icon-button--stop:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.agent-dashboard__pinned {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-dashboard__pinned-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.agent-dashboard__pinned-chip {
+  align-items: center;
+  background: var(--background-modifier-hover);
+  border-radius: 10px;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 4px;
+  padding: 2px 6px;
+}
+
+.agent-dashboard__pinned-remove {
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.agent-dashboard__pinned-remove:hover {
+  color: var(--text-normal);
+}
+
+.agent-dashboard__queued {
+  align-items: center;
+  background: var(--background-modifier-hover);
   border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.agent-dashboard__queued-icon {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+}
+
+.agent-dashboard__queued-text {
+  color: var(--text-muted);
+  flex: 1 1 auto;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-dashboard__run-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-dashboard__run-controls button {
+  font-size: 12px;
+}
+
+.agent-dashboard__prompt-input {
+  background: var(--agent-dashboard-sunken);
+  border: 1px solid var(--agent-dashboard-border);
+  border-radius: 10px;
   color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: var(--font-ui-small);
   line-height: 1.4;
   min-height: 72px;
+  padding: 8px 10px;
   resize: vertical;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
   width: 100%;
 }
 
+.agent-dashboard__prompt-input:focus,
+.agent-dashboard__prompt-input:focus-visible {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  outline: none;
+}
+
 .agent-dashboard__mention-suggestions {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-base);
   border: 1px solid var(--agent-dashboard-border);
   border-radius: 8px;
   box-shadow: var(--shadow-s);
@@ -1348,10 +1620,11 @@
 }
 
 .agent-dashboard__composer-actions {
+  align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
+  gap: 4px;
+  /* The spacer element divides context actions from send/stop. */
+  justify-content: flex-start;
 }
 
 .agent-dashboard__composer-actions button {
@@ -1360,7 +1633,7 @@
 }
 
 .agent-dashboard__export-path-input {
-  background: var(--background-primary);
+  background: var(--agent-dashboard-base);
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   color: var(--text-normal);

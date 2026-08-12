@@ -1,14 +1,16 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 
-import AgentDashboardPlugin from "./main";
+// Type-only: settings.ts is imported by modules that must not pull in main.ts.
+import type AgentDashboardPlugin from "./main";
 import { DEFAULT_SIDEKICK_ROOT, normalizeSidekickRoot } from "./agent/SidekickProfile";
+import type { PiToolMode } from "./types";
 
 export interface AgentDashboardSettings {
   agentSessionName: string;
   allowedExternalWorkspaceRoots: string;
   autoStartBridge: boolean;
-  piToolMode: "disabled" | "read-only";
-  piExperimentalFeaturesEnabled: boolean;
+  piToolMode: PiToolMode;
+  allowPiUserConfig: boolean;
   piPromptTimeoutMinutes: number;
   piExecutablePath: string;
   selectedPiModel: string;
@@ -28,8 +30,14 @@ export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   agentSessionName: "default",
   allowedExternalWorkspaceRoots: "",
   autoStartBridge: true,
-  piToolMode: "disabled",
-  piExperimentalFeaturesEnabled: false,
+  // Pi's built-in read, grep, find, and ls. Meaningful only while
+  // allowPiUserConfig stays false — see below.
+  piToolMode: "read-only",
+  // Must stay false. Pi's --tools/--no-tools filter built-in tools only;
+  // extension-registered tools bypass them (earendil-works/pi#2835). Passing
+  // --no-extensions is therefore what makes the read-only mode above mean
+  // anything at all.
+  allowPiUserConfig: false,
   piPromptTimeoutMinutes: 10,
   piExecutablePath: "pi",
   selectedPiModel: "",
@@ -171,7 +179,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Pi tools")
       .setDesc(
-        "Disabled keeps Pi fully tool-free. Read-only enables Pi's read, grep, find, and ls tools from the vault root; bash, edit, and write stay disabled."
+        "Read-only is the default: Pi may use its read, grep, find, and ls tools from the vault root, while bash, edit, and write stay off. Disabled keeps Pi fully tool-free. This only limits Pi's built-in tools, so it holds only while the extensions setting below is off."
       )
       .addDropdown((dropdown) =>
         dropdown
@@ -179,7 +187,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           .addOption("read-only", "Read-only: read, grep, find, ls")
           .setValue(this.plugin.settings.piToolMode)
           .onChange(async (value) => {
-            this.plugin.settings.piToolMode = value as "disabled" | "read-only";
+            this.plugin.settings.piToolMode = value as PiToolMode;
             await this.plugin.saveSettings();
             this.plugin.refreshDashboardViews();
           })
@@ -219,7 +227,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Default model")
-      .setDesc("Optional Ollama model name to preselect in sidekick blocks.")
+      .setDesc("Optional Ollama model name to preselect in Sidekick blocks.")
       .addText((text) =>
         text
           .setPlaceholder("qwen2.5-coder:latest")
@@ -233,7 +241,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Compact block height")
-      .setDesc("Default height, in pixels, for embedded sidekick blocks.")
+      .setDesc("Default height, in pixels, for embedded Sidekick blocks.")
       .addSlider((slider) =>
         slider
           .setLimits(240, 720, 20)
@@ -247,7 +255,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Status panel height")
-      .setDesc("Default sidebar status panel height. You can also drag the divider between Status and Agent.")
+      .setDesc("Default sidebar status panel height. You can also drag the divider between status and agent.")
       .addSlider((slider) =>
         slider
           .setLimits(96, 420, 8)
@@ -306,18 +314,16 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
       );
 
 
-    new Setting(containerEl).setName("Experimental").setHeading();
-
     new Setting(containerEl)
-      .setName("Allow Pi extensions, skills, prompt templates, and context files")
+      .setName("Allow Pi extensions and user configuration")
       .setDesc(
-        "Experimental and disabled by default. When enabled, Local Sidekick stops passing Pi flags that disable extensions, skills, prompt templates, and context files. Enable only if you trust your Pi configuration and understand the extra context/tools Pi may load."
+        "Off by default, so Pi ignores your own extensions, skills, prompt templates, and context files. Turn this on if you want Pi to use extensions you have written or installed. Be aware that Pi's tool limits only cover its built-in tools: an extension can register tools that ignore the Pi tools setting above, so enabling this means Local Sidekick can no longer bound what Pi does. Only enable it if you trust every extension your Pi configuration loads."
       )
       .addToggle((toggle) =>
         toggle
-          .setValue(this.plugin.settings.piExperimentalFeaturesEnabled)
+          .setValue(this.plugin.settings.allowPiUserConfig)
           .onChange(async (value) => {
-            this.plugin.settings.piExperimentalFeaturesEnabled = value;
+            this.plugin.settings.allowPiUserConfig = value;
             await this.plugin.saveSettings();
             this.plugin.refreshDashboardViews();
           })

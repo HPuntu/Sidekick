@@ -14,9 +14,15 @@ export interface PiReadOnlyPromptOptions {
   allowExperimentalPiFeatures?: boolean;
 }
 
+/** How a run ended, for callers that must not infer it from status text. */
+export type PiRunCompletion = "completed" | "stopped";
+
 export interface PiReadOnlyPromptCallbacks {
   onAssistantDelta(delta: string): void;
+  /** Terminal failure. Mutually exclusive with onComplete. */
   onError(message: string): void;
+  /** Terminal success or abort. Mutually exclusive with onError. */
+  onComplete(reason: PiRunCompletion): void;
   onSessionState?(state: PiSessionState): void;
   onStatus(message: string): void;
   onToolEvent(event: PiToolEvent): void;
@@ -145,7 +151,7 @@ export class PiReadOnlyPromptRun {
       id: "local-sidekick-abort",
       type: "abort"
     });
-    this.complete("Pi read-only prompt stopped.");
+    this.complete("Pi read-only prompt stopped.", "stopped");
   }
 
   private handleStdout(chunk: string): void {
@@ -193,7 +199,7 @@ export class PiReadOnlyPromptRun {
     if (response.command === "get_state") {
       this.callbacks.onSessionState?.(extractSessionState(response.data));
       if (this.pendingCompletionMessage) {
-        this.complete(this.pendingCompletionMessage);
+        this.complete(this.pendingCompletionMessage, "completed");
       }
       return;
     }
@@ -341,7 +347,7 @@ export class PiReadOnlyPromptRun {
     this.child.stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
-  private complete(message: string): void {
+  private complete(message: string, reason: PiRunCompletion): void {
     if (this.completed) {
       return;
     }
@@ -349,11 +355,12 @@ export class PiReadOnlyPromptRun {
     this.completed = true;
     this.cleanup();
     this.callbacks.onStatus(message);
+    this.callbacks.onComplete(reason);
   }
 
   private requestFinalStateThenComplete(message: string): void {
     if (!this.child || this.child.stdin.destroyed) {
-      this.complete(message);
+      this.complete(message, "completed");
       return;
     }
 

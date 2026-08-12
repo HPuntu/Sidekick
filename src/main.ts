@@ -1,14 +1,9 @@
 import {
-  App,
-  ButtonComponent,
   FileSystemAdapter,
   MarkdownFileInfo,
-  Modal,
   Notice,
   Plugin,
-  TAbstractFile,
   TFile,
-  TFolder,
   WorkspaceLeaf
 } from "obsidian";
 import path from "path";
@@ -22,14 +17,29 @@ import {
 } from "./agent/AgentSession";
 import {
   createLineDiff,
-  parseProposedEditsFromMarkdown,
-  ProposedEditDiffLine
+  parseProposedEditsFromMarkdown
 } from "./agent/ProposedEdit";
+import {
+  buildPiPromptTemplate,
+  buildPiSkillResource,
+  mergeStringSetting,
+  sanitizePiResourceName
+} from "./agent/piResources";
+import {
+  findSidekickProfile,
+  getSidekickProfileDisplayName,
+  getSidekickProfileSlug,
+  getStarterSidekickFiles,
+  loadSidekickProfiles,
+  normalizeSidekickRoot,
+  SidekickProfile
+} from "./agent/SidekickProfile";
 import { BridgeService } from "./bridge/BridgeService";
 import {
   createCheckingOllamaSnapshot,
   createUnknownOllamaSnapshot,
-  OllamaSnapshot
+  OllamaSnapshot,
+  unloadOllamaModel
 } from "./bridge/ollama/OllamaClient";
 import {
   createCheckingPiSnapshot,
@@ -45,10 +55,38 @@ import {
 import {
   PiReadOnlyPromptRun,
   PiSessionState,
-  PiToolEvent,
   setPiRpcModel
 } from "./bridge/pi/PiReadOnlyPrompt";
+import {
+  createUnexpectedToolEvent,
+  createPiToolEvent,
+  describePiToolMode,
+  formatPiExperimentalFeatureFlag,
+  formatPiToolFlag,
+  getOllamaModelName,
+  isPiRunPhaseNoise,
+  isPiToolSupportErrorStatus,
+  isReadOnlyPiToolEvent
+} from "./bridge/pi/piFlags";
+import { buildChatExportMarkdown } from "./export/chatExport";
 import { registerAgentDashboardBlock } from "./markdown/agentDashboardBlock";
+import {
+  normalizeMentionedPath,
+  scoreVaultFileSuggestion
+} from "./prompt/mentions";
+import {
+  buildDirectiveContext,
+  buildMentionedFileContext,
+  buildNoteContext,
+  buildPinnedContext,
+  buildSidekickProfileContext,
+  buildVaultSearchContext,
+  PromptContextDeps
+} from "./prompt/buildContext";
+import {
+  getEditProposalInstructions,
+  getVaultGroundingInstructions,
+} from "./prompt/promptContext";
 import {
   ApprovalRecord,
   countPendingApprovals,
@@ -56,6 +94,7 @@ import {
 } from "./security/ApprovalQueue";
 import {
   assessSafetyRequest,
+  describeSafetyRequest,
   parseExternalRoots,
   SafetyDecision,
   SafetyRequest,
@@ -63,153 +102,70 @@ import {
   summarizeAllowedRoots
 } from "./security/SafetyPolicy";
 import {
+  countConversationMessages,
+  createAgentSessionName,
+  getHistoryItemForSessionRecord,
+  getPersistedAgentSession,
+  getPersistedAgentSessions,
+  getPersistedSettings,
+  getSessionLastMessage,
+  getSessionTitle,
+  isPersistedAgentSessionRecord,
+  normalizeSettings,
+  sanitizeSessionFileName
+} from "./session/persistence";
+import {
   AgentDashboardSettingTab,
   AgentDashboardSettings,
   DEFAULT_SETTINGS
 } from "./settings";
 import {
-  findSidekickProfile,
-  getSidekickProfileDisplayName,
-  getSidekickProfileSlug,
-  getStarterSidekickFiles,
-  loadSidekickProfiles,
-  normalizeSidekickRoot,
-  SidekickProfile
-} from "./agent/SidekickProfile";
+  formatInternalLinkSuggestions,
+  proposeInternalLinksForFile
+} from "./tools/InternalLinks";
+import type {
+  AgentDashboardAgentView,
+  AgentPromptContextMode,
+  AgentSessionHistoryItem,
+  PersistedAgentDashboardData,
+  PersistedAgentSessionRecord,
+  PersistedAgentSessionState,
+  PiToolMode,
+  PromptContextBlock,
+  PromptSidekickProfileSelection,
+  QueuedPrompt,
+  ProposedEditRecord
+} from "./types";
+import { AgentChatExportModal } from "./ui/modals/AgentChatExportModal";
+import { confirmLocalRisk } from "./ui/modals/ConfirmationModal";
+import {
+  asPlainRecord,
+  getErrorMessage,
+  getMaxIdCounter,
+  sanitizeProjectIndexText,
+} from "./util/text";
+import {
+  normalizeChatExportPath,
+  normalizeProposedEditPath,
+  normalizeVaultFolderPath,
+  slugifyFileName
+} from "./util/vaultPath";
 import {
   AGENT_DASHBOARD_VIEW_TYPE,
   AgentDashboardView
 } from "./views/AgentDashboardView";
-import {
-  formatInternalLinkSuggestions,
-  proposeInternalLinksForFile
-} from "./tools/InternalLinks";
-import {
-  parseAllowedCommands,
-  runAllowedCommand
-} from "./tools/SafeCommands";
-import {
-  buildVaultIndexSummary,
-  findRelatedVaultNotes,
-  formatVaultSearchHits,
-  searchVault
-} from "./tools/VaultSearch";
-import {
-  fetchUrlText,
-  parseAllowedHosts
-} from "./tools/WebFetch";
-import { extractPdfText } from "./tools/PdfText";
 
-const MAX_CONTEXT_CHARS = 20000;
-const MAX_DIRECTORY_CONTEXT_ITEMS = 80;
-const MAX_MENTIONED_FILES = 5;
-const MAX_PDF_CONTEXT_BYTES = 50 * 1024 * 1024;
-const MAX_SIDEKICK_PROFILE_INCLUDES = 8;
 const MAX_SIDEKICK_PROJECT_INDEX_FILES = 500;
 const MAX_SIDEKICK_PROJECT_INDEX_HEADINGS_PER_FILE = 8;
 const DEFAULT_CHAT_EXPORT_FOLDER = "Chats";
-const TEXT_CONTEXT_EXTENSIONS = new Set([
-  "bib",
-  "csv",
-  "json",
-  "latex",
-  "md",
-  "mmd",
-  "tex",
-  "txt",
-  "yaml",
-  "yml"
-]);
 
-export type AgentPromptContextMode = "none" | "note" | "selection" | "vault";
-export type AgentDashboardAgentView = "chat" | "history";
-
-interface PromptContextBlock {
-  eventText: string;
-  promptPrefix: string;
-}
-
-interface MentionedVaultFileReference {
-  end: number;
-  file: TFile;
-  mention: string;
-  start: number;
-}
-
-interface PromptToolDirective {
-  kind: "cmd" | "index" | "links" | "search" | "semantic" | "url";
-  value: string;
-}
-
-interface PromptSidekickProfileSelection {
-  profile?: SidekickProfile;
-  prompt: string;
-}
-
-export interface AgentSessionHistoryItem {
-  createdAt: string;
-  lastMessage: string;
-  messageCount?: number;
-  name: string;
-  piSessionId?: string;
-  title: string;
-  updatedAt: string;
-}
-
-export type ProposedEditStatus =
-  | "applied"
-  | "apply-error"
-  | "approved"
-  | "denied"
-  | "pending-approval";
-
-export interface ProposedEditRecord {
-  approvalId?: string;
-  applyError?: string;
-  createdAt: string;
-  diffLines: ProposedEditDiffLine[];
-  eventId: string;
-  fileExists: boolean;
-  id: string;
-  originalText: string;
-  path: string;
-  replacementText: string;
-  status: ProposedEditStatus;
-}
-
-interface PersistedAgentDashboardData {
-  agentSession?: PersistedAgentSessionState;
-  agentSessions?: PersistedAgentSessionsState;
-  schemaVersion?: number;
-  settings?: Partial<AgentDashboardSettings>;
-}
-
-interface PersistedAgentSessionsState {
-  currentSessionName?: string;
-  records?: PersistedAgentSessionRecord[];
-  viewMode?: AgentDashboardAgentView;
-}
-
-interface PersistedAgentSessionRecord extends PersistedAgentSessionState {
-  createdAt: string;
-  lastMessage?: string;
-  messageCount?: number;
-  name: string;
-  title: string;
-}
-
-interface PersistedAgentSessionState {
-  agentEventCounter?: number;
-  approvalCounter?: number;
-  approvalRecords?: ApprovalRecord[];
-  events?: AgentEvent[];
-  piSessionId?: string;
-  piSessionMessageCount?: number;
-  piSessionPath?: string;
-  proposedEditCounter?: number;
-  proposedEdits?: ProposedEditRecord[];
-  updatedAt?: string;
-}
+export type {
+  AgentDashboardAgentView,
+  AgentPromptContextMode,
+  AgentSessionHistoryItem,
+  ProposedEditRecord,
+  ProposedEditStatus
+} from "./types";
 
 export default class AgentDashboardPlugin extends Plugin {
   agentEvents: AgentEvent[] = [];
@@ -234,12 +190,17 @@ export default class AgentDashboardPlugin extends Plugin {
   piSessionId?: string;
   piSessionMessageCount?: number;
   piSessionPath?: string;
+  /** Held while a run is in flight, dispatched at the turn boundary. */
+  queuedPrompt?: QueuedPrompt;
+  /** Backs resend and edit-last. */
+  lastSubmittedPrompt?: QueuedPrompt;
+  /** Vault files attached to every prompt in this session. */
+  pinnedContextPaths: string[] = [];
   private agentEventCounter = 0;
   private approvalCounter = 0;
   private proposedEditCounter = 0;
   private activePromptRun?: PiReadOnlyPromptRun;
   private confirmedPiExecutablePaths = new Set<string>([DEFAULT_SETTINGS.piExecutablePath]);
-  private confirmedExperimentalPiFeatures = false;
   private agentSessionRecords: PersistedAgentSessionRecord[] = [];
   private lastMarkdownFileInfo: MarkdownFileInfo | null = null;
   private savePluginDataTimeout?: number;
@@ -293,7 +254,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.addCommand({
       id: "open-sidekick",
-      name: "Open sidekick",
+      name: "Open Sidekick",
       callback: async () => {
         await this.activateView();
       }
@@ -301,7 +262,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.addCommand({
       id: "insert-sidekick-block",
-      name: "Insert sidekick block",
+      name: "Insert Sidekick block",
       editorCallback: (editor) => {
         editor.replaceSelection(
           [
@@ -317,7 +278,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.addCommand({
       id: "restart-sidekick-bridge",
-      name: "Restart sidekick bridge",
+      name: "Restart Sidekick bridge",
       callback: async () => {
         const snapshot = await this.bridge.restart();
         this.showBridgeNotice(snapshot.status);
@@ -327,7 +288,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.addCommand({
       id: "stop-sidekick-bridge",
-      name: "Stop sidekick bridge",
+      name: "Stop Sidekick bridge",
       callback: async () => {
         const snapshot = await this.bridge.stop();
         this.showBridgeNotice(snapshot.status);
@@ -522,6 +483,9 @@ export default class AgentDashboardPlugin extends Plugin {
     this.agentEventCounter = 0;
     this.approvalCounter = 0;
     this.proposedEditCounter = 0;
+    this.pinnedContextPaths = [];
+    this.queuedPrompt = undefined;
+    this.lastSubmittedPrompt = undefined;
     this.agentViewMode = "chat";
     this.addAgentEvent(
       "status",
@@ -546,6 +510,8 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.restorePersistedAgentSession(session);
     this.settings.agentSessionName = session.name;
+    this.queuedPrompt = undefined;
+    this.lastSubmittedPrompt = undefined;
     this.agentViewMode = "chat";
     await this.savePluginData();
     this.refreshDashboardViews();
@@ -980,13 +946,10 @@ export default class AgentDashboardPlugin extends Plugin {
       return;
     }
 
-    if (!(await this.confirmPiExperimentalFeaturesForSession("discover Pi RPC"))) {
-      return;
-    }
 
     this.assessSafetyRequest({
       kind: "diagnostic",
-      command: `${this.settings.piExecutablePath} --mode rpc --no-session ${formatPiExperimentalFeatureFlag(this.settings.piExperimentalFeaturesEnabled)}`,
+      command: `${this.settings.piExecutablePath} --mode rpc --no-session ${formatPiExperimentalFeatureFlag(this.settings.allowPiUserConfig)}`,
       description: "Discover Pi RPC readiness"
     });
     this.piRpcDiscoverySnapshot = createCheckingPiRpcDiscoverySnapshot(
@@ -996,7 +959,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.piRpcDiscoverySnapshot = await this.bridge.discoverPiRpc(
       this.settings.piExecutablePath,
-      this.settings.piExperimentalFeaturesEnabled
+      this.settings.allowPiUserConfig
     );
     this.refreshDashboardViews();
 
@@ -1040,6 +1003,33 @@ export default class AgentDashboardPlugin extends Plugin {
     this.refreshDashboardViews();
   }
 
+  /**
+   * Tears the pipeline down: stops any run, closes the bridge, and evicts the
+   * model from Ollama so its memory is actually released. Ollama holds a model
+   * resident on its own timer, so without the eviction this frees nothing.
+   */
+  async shutdownPipeline(): Promise<void> {
+    this.stopAgentRun();
+    await this.bridge.stop();
+
+    const model = getOllamaModelName(this.settings.selectedPiModel);
+    if (!model) {
+      new Notice("Sidekick stopped.");
+      this.refreshDashboardViews();
+      return;
+    }
+
+    const result = await unloadOllamaModel(this.settings.ollamaHost, model);
+    new Notice(
+      result.success
+        ? `Sidekick stopped and unloaded ${result.model}.`
+        : `Sidekick stopped. Could not unload ${result.model}: ${result.error}`
+    );
+
+    await this.refreshOllamaStatus(false);
+    this.refreshDashboardViews();
+  }
+
   async sendAgentPrompt(
     prompt: string,
     contextMode: AgentPromptContextMode = "none"
@@ -1050,11 +1040,15 @@ export default class AgentDashboardPlugin extends Plugin {
       return false;
     }
 
+    // Typing ahead is the point: hold the prompt and send it when the current
+    // run finishes, rather than making the user wait and resubmit.
     if (this.agentSessionStatus === "running") {
-      new Notice("Agent is already running");
-      return false;
+      this.queuedPrompt = { contextMode, prompt: trimmedPrompt };
+      this.refreshDashboardViews();
+      return true;
     }
 
+    this.lastSubmittedPrompt = { contextMode, prompt: trimmedPrompt };
     const profileSelection = await this.resolveSidekickProfileForPrompt(trimmedPrompt);
     if (!profileSelection) {
       return false;
@@ -1071,19 +1065,22 @@ export default class AgentDashboardPlugin extends Plugin {
       return false;
     }
 
-    if (!(await this.confirmPiExperimentalFeaturesForSession("run a Pi prompt"))) {
-      return false;
-    }
 
+    // Built once so settings and the active file stay consistent for this run.
+    const deps = this.createPromptContextDeps();
     const contextBlocks: PromptContextBlock[] = [];
-    const profileContext = await this.buildSidekickProfilePromptContext(activeProfile);
+    const profileContext = await buildSidekickProfileContext(deps, activeProfile);
     if (!profileContext) {
       return false;
     }
 
     contextBlocks.push(...profileContext);
+    contextBlocks.push(
+      ...(await buildPinnedContext(deps, this.pinnedContextPaths))
+    );
+
     if (contextMode !== "none" && contextMode !== "vault") {
-      const context = await this.buildPromptContext(contextMode);
+      const context = await buildNoteContext(deps, contextMode);
       if (!context) {
         return false;
       }
@@ -1092,22 +1089,16 @@ export default class AgentDashboardPlugin extends Plugin {
     }
 
     if (contextMode === "vault") {
-      const vaultContext = await this.buildVaultSearchPromptContext(trimmedPrompt);
-      contextBlocks.push(...vaultContext);
+      contextBlocks.push(...(await buildVaultSearchContext(deps, trimmedPrompt)));
     }
 
-    const mentionContext = await this.buildMentionedFileContext(trimmedPrompt);
+    const mentionContext = await buildMentionedFileContext(deps, trimmedPrompt);
     if (!mentionContext) {
       return false;
     }
 
     contextBlocks.push(...mentionContext);
-    const directiveContext = await this.buildDirectivePromptContext(trimmedPrompt);
-    if (!directiveContext) {
-      return false;
-    }
-
-    contextBlocks.push(...directiveContext);
+    contextBlocks.push(...(await buildDirectiveContext(deps, trimmedPrompt)));
     for (const context of contextBlocks) {
       this.addAgentEvent("tool", context.eventText);
     }
@@ -1134,8 +1125,10 @@ export default class AgentDashboardPlugin extends Plugin {
 
     const promptDecision = this.assessSafetyRequest({
       kind: "prompt",
-      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)} ${formatPiExperimentalFeatureFlag(this.settings.piExperimentalFeaturesEnabled)}`,
-      description: `Run Pi prompt with ${describePiToolMode(toolMode)}`
+      // The command is recorded for the audit log; the decision uses toolMode.
+      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)} ${formatPiExperimentalFeatureFlag(this.settings.allowPiUserConfig)}`,
+      description: `Run Pi prompt with ${describePiToolMode(toolMode)}`,
+      toolMode
     });
 
     if (!promptDecision.allowed) {
@@ -1157,11 +1150,8 @@ export default class AgentDashboardPlugin extends Plugin {
       return false;
     }
 
-    this.addAgentEvent(
-      "tool",
-      `Safety guard allowed prompt: ${promptDecision.reason}`
-    );
-    this.addAgentEvent("status", `Starting Pi prompt (${describePiToolMode(toolMode)}).`);
+    // Only blocked decisions are worth a line in the stream; an allowed run is
+    // self-evident from the reply that follows.
     this.refreshDashboardViews();
     this.startReadOnlyPiPrompt(promptForPi, sessionPath, toolMode, workspaceRoot);
 
@@ -1169,6 +1159,9 @@ export default class AgentDashboardPlugin extends Plugin {
   }
 
   stopAgentRun(): void {
+    // A queued follow-up was meant for the run being cancelled.
+    this.queuedPrompt = undefined;
+
     if (this.activePromptRun) {
       this.activePromptRun.abort();
       this.activePromptRun = undefined;
@@ -1179,6 +1172,60 @@ export default class AgentDashboardPlugin extends Plugin {
       this.addAgentEvent("status", "Pi read-only prompt stopped.");
       this.refreshDashboardViews();
     }
+  }
+
+  cancelQueuedPrompt(): void {
+    this.queuedPrompt = undefined;
+    this.refreshDashboardViews();
+  }
+
+  /** Stops the current run and submits the last prompt again unchanged. */
+  async resendLastPrompt(): Promise<void> {
+    const last = this.lastSubmittedPrompt;
+    if (!last) {
+      new Notice("No previous prompt to resend");
+      return;
+    }
+
+    this.stopAgentRun();
+    await this.sendAgentPrompt(last.prompt, last.contextMode);
+  }
+
+  /**
+   * Stops the run and hands the last prompt back for editing. Pi keeps its own
+   * session history, so this does not rewind the model's context.
+   */
+  takeLastPromptForEditing(): QueuedPrompt | undefined {
+    const last = this.lastSubmittedPrompt;
+    if (!last) {
+      new Notice("No previous prompt to edit");
+      return undefined;
+    }
+
+    this.stopAgentRun();
+    return last;
+  }
+
+  togglePinnedContextPath(vaultPath: string): void {
+    const index = this.pinnedContextPaths.indexOf(vaultPath);
+    if (index === -1) {
+      this.pinnedContextPaths.push(vaultPath);
+    } else {
+      this.pinnedContextPaths.splice(index, 1);
+    }
+
+    this.queuePluginDataSave();
+    this.refreshDashboardViews();
+  }
+
+  pinActiveNote(): void {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      new Notice("No active note to pin");
+      return;
+    }
+
+    this.togglePinnedContextPath(file.path);
   }
 
   clearAgentEvents(): void {
@@ -1375,9 +1422,6 @@ export default class AgentDashboardPlugin extends Plugin {
       return;
     }
 
-    if (!(await this.confirmPiExperimentalFeaturesForSession("set the Pi model"))) {
-      return;
-    }
 
     this.settings.selectedPiModel = modelLabel;
     await this.saveSettings();
@@ -1409,7 +1453,7 @@ export default class AgentDashboardPlugin extends Plugin {
       sessionPath,
       modelLabel,
       5000,
-      this.settings.piExperimentalFeaturesEnabled
+      this.settings.allowPiUserConfig
     );
 
     if (result.success) {
@@ -1502,20 +1546,41 @@ export default class AgentDashboardPlugin extends Plugin {
     this.refreshDashboardViews();
   }
 
+  /** Full repaint, coalesced to one per frame by the view. */
   refreshDashboardViews(): void {
+    for (const view of this.getDashboardViews()) {
+      view.scheduleRender();
+    }
+  }
+
+  /**
+   * Repaints just this event's text. Used for streamed assistant deltas, where
+   * a full rebuild per token costs O(events) markdown renders and would throw
+   * away the composer draft, focus, and scroll position.
+   */
+  private refreshStreamedEvent(event: AgentEvent): void {
+    for (const view of this.getDashboardViews()) {
+      view.scheduleStreamUpdate(event);
+    }
+  }
+
+  private getDashboardViews(): AgentDashboardView[] {
+    const views: AgentDashboardView[] = [];
     for (const leaf of this.app.workspace.getLeavesOfType(
       AGENT_DASHBOARD_VIEW_TYPE
     )) {
       if (leaf.view instanceof AgentDashboardView) {
-        leaf.view.render();
+        views.push(leaf.view);
       }
     }
+
+    return views;
   }
 
   private showBridgeNotice(status: string): void {
     const snapshot = this.bridge.getSnapshot();
     if (status === "running" && snapshot.url) {
-    new Notice(`Local Sidekick bridge running on ${snapshot.url}`);
+      new Notice(`Local Sidekick bridge running on ${snapshot.url}`);
       return;
     }
 
@@ -1539,6 +1604,11 @@ export default class AgentDashboardPlugin extends Plugin {
     this.piSessionId = state.piSessionId;
     this.piSessionMessageCount = state.piSessionMessageCount;
     this.piSessionPath = state.piSessionPath;
+    this.pinnedContextPaths = Array.isArray(state.pinnedContextPaths)
+      ? state.pinnedContextPaths.filter(
+          (item): item is string => typeof item === "string"
+        )
+      : [];
     this.agentEventCounter =
       state.agentEventCounter ?? getMaxIdCounter(this.agentEvents, "agent-event-");
     this.approvalCounter =
@@ -1627,6 +1697,7 @@ export default class AgentDashboardPlugin extends Plugin {
       piSessionId: this.piSessionId,
       piSessionMessageCount: this.piSessionMessageCount,
       piSessionPath: this.piSessionPath,
+      pinnedContextPaths: this.pinnedContextPaths,
       proposedEditCounter: this.proposedEditCounter,
       proposedEdits: this.proposedEdits,
       title: getSessionTitle(
@@ -1669,6 +1740,7 @@ export default class AgentDashboardPlugin extends Plugin {
         piSessionId: this.piSessionId,
         piSessionMessageCount: this.piSessionMessageCount,
         piSessionPath: this.piSessionPath,
+        pinnedContextPaths: this.pinnedContextPaths,
         proposedEditCounter: this.proposedEditCounter,
         proposedEdits: this.proposedEdits,
         updatedAt: new Date().toISOString()
@@ -1725,37 +1797,6 @@ export default class AgentDashboardPlugin extends Plugin {
     new Notice("Pi executable action cancelled");
     return false;
   }
-  private async confirmPiExperimentalFeaturesForSession(
-    action: string
-  ): Promise<boolean> {
-    if (!this.settings.piExperimentalFeaturesEnabled) {
-      return true;
-    }
-
-    if (this.confirmedExperimentalPiFeatures) {
-      return true;
-    }
-
-    const confirmed = await confirmLocalRisk(
-      this.app,
-      "Confirm experimental Pi features",
-      [
-        "This vault has experimental Pi extensions, skills, prompt templates, and context files enabled.",
-        "Action: " + action + ".",
-        "Local Sidekick will stop passing the flags that disable those Pi features. Only continue if you trust this vault and your Pi configuration. This confirmation is remembered only for the current Obsidian session."
-      ].join("\n\n")
-    );
-
-    if (confirmed) {
-      this.confirmedExperimentalPiFeatures = true;
-      return true;
-    }
-
-    new Notice("Experimental Pi feature action cancelled");
-    return false;
-  }
-
-
   private getPiSessionPath(): string | undefined {
     const vaultRoot = this.getVaultRoot();
     const sessionFolder = this.getPiSessionVaultFolderPath();
@@ -2120,488 +2161,22 @@ export default class AgentDashboardPlugin extends Plugin {
     return { profile, prompt: remainingPrompt };
   }
 
-  private async buildSidekickProfilePromptContext(
-    profile: SidekickProfile | undefined
-  ): Promise<PromptContextBlock[] | undefined> {
-    if (!profile) {
-      return [];
-    }
-
-    if (profile.includePaths.length > MAX_SIDEKICK_PROFILE_INCLUDES) {
-      new Notice(`Sidekick profile includes too many files. Limit is ${MAX_SIDEKICK_PROFILE_INCLUDES}.`);
-      return undefined;
-    }
-
-    const profileLines = [
-      `Name: ${profile.name}`,
-      `Path: ${profile.path}`,
-      profile.description ? `Description: ${profile.description}` : "",
-      profile.modelLabels.length > 0
-        ? `Model choices: ${profile.modelLabels.join(", ")}`
-        : "",
-      profile.toolMode ? `Requested Pi tools: ${describePiToolMode(profile.toolMode)}` : "",
-      "",
-      "Instructions:",
-      profile.prompt
-    ].filter(Boolean);
-
-    const blocks: PromptContextBlock[] = [
-      {
-        eventText: `Loaded Sidekick agent profile ${getSidekickProfileDisplayName(profile)}.`,
-        promptPrefix: formatPromptContext(
-          "Sidekick agent profile",
-          profile.path,
-          limitContextText(profileLines.join("\n"))
-        )
-      }
-    ];
-
-    for (const includePath of profile.includePaths) {
-      const file = this.app.vault.getFileByPath(includePath);
-      if (!file) {
-        new Notice(`Sidekick include not found: ${includePath}`);
-        this.addAgentEvent(
-          "tool",
-          `Blocked Sidekick include: ${includePath} was not found in the vault.`
-        );
-        this.refreshDashboardViews();
-        return undefined;
-      }
-
-      if (!TEXT_CONTEXT_EXTENSIONS.has(file.extension.toLowerCase())) {
-        new Notice(`Sidekick include must be a text file: ${file.path}`);
-        this.addAgentEvent(
-          "tool",
-          `Blocked Sidekick include: ${file.path} is not a readable text context file.`
-        );
-        this.refreshDashboardViews();
-        return undefined;
-      }
-
-      const targetPath = this.getVaultFileAbsolutePath(file);
-      const readDecision = this.assessSafetyRequest({
-        description: `Read Sidekick profile include: ${file.path}`,
-        kind: "read",
-        targetPath
-      });
-
-      if (!readDecision.allowed) {
-        this.addAgentEvent(
-          "tool",
-          `Safety guard blocked Sidekick include ${file.path}: ${readDecision.reason}`
-        );
-        this.refreshDashboardViews();
-        return undefined;
-      }
-
-      const contents = await this.app.vault.cachedRead(file);
-      const text = limitContextText(contents);
-      blocks.push({
-        eventText: `Loaded Sidekick memory include ${file.path} (${text.length.toLocaleString()} chars).`,
-        promptPrefix: formatPromptContext("Sidekick memory include", file.path, text)
-      });
-    }
-
-    return blocks;
-  }
-
-  private async buildPromptContext(
-    mode: Exclude<AgentPromptContextMode, "none">
-  ): Promise<PromptContextBlock | undefined> {
-    const activeInfo = this.getActiveMarkdownFileInfo();
-    const file =
-      mode === "selection"
-        ? activeInfo?.file
-        : this.app.workspace.getActiveFile() ?? activeInfo?.file;
-
-    if (!file) {
-      new Notice("No active note found");
-      return undefined;
-    }
-
-    const targetPath = this.getVaultFileAbsolutePath(file);
-    const readDecision = this.assessSafetyRequest({
-      description:
-        mode === "note" ? "Read current note context" : "Read selection context",
-      kind: "read",
-      targetPath
-    });
-
-    if (!readDecision.allowed) {
-      this.addAgentEvent(
-        "tool",
-        `Safety guard blocked context: ${readDecision.reason}`
-      );
-      this.refreshDashboardViews();
-      return undefined;
-    }
-
-    if (mode === "selection") {
-      const selection = activeInfo?.editor?.getSelection().trim() ?? "";
-      if (!selection) {
-        new Notice("No active editor selection found");
-        return undefined;
-      }
-
-      const text = limitContextText(selection);
-      return {
-        eventText: `Added selection context from ${file.path} (${text.length.toLocaleString()} chars).`,
-        promptPrefix: formatPromptContext("Current selection", file.path, text)
-      };
-    }
-
-    const contents = await this.app.vault.read(file);
-    const text = limitContextText(contents);
+  private createPromptContextDeps(): PromptContextDeps {
     return {
-      eventText: `Added current note context from ${file.path} (${text.length.toLocaleString()} chars).`,
-      promptPrefix: formatPromptContext("Current note", file.path, text)
-    };
-  }
-
-  private async buildMentionedFileContext(
-    prompt: string
-  ): Promise<PromptContextBlock[] | undefined> {
-    const mentionedFiles = extractMentionedVaultFileReferences(
-      prompt,
-      this.app.vault.getFiles()
-    );
-    const unresolvedMentions = extractUnresolvedMentionedVaultPaths(
-      prompt,
-      mentionedFiles
-    );
-
-    if (unresolvedMentions.length > 0) {
-      const unresolvedMention = unresolvedMentions[0];
-      new Notice(`Could not resolve @${unresolvedMention}`);
-      this.addAgentEvent(
-        "tool",
-        `Blocked @ context: @${unresolvedMention} was not found in the vault.`
-      );
-      this.refreshDashboardViews();
-      return undefined;
-    }
-
-    if (mentionedFiles.length === 0) {
-      return [];
-    }
-
-    if (mentionedFiles.length > MAX_MENTIONED_FILES) {
-      new Notice(
-        `Too many @ files. Limit is ${MAX_MENTIONED_FILES} per prompt.`
-      );
-      return undefined;
-    }
-
-    const blocks: PromptContextBlock[] = [];
-    for (const mentionedFile of mentionedFiles) {
-      const file = mentionedFile.file;
-      const targetPath = this.getVaultFileAbsolutePath(file);
-      const readDecision = this.assessSafetyRequest({
-        description: `Read @ file context: ${file.path}`,
-        kind: "read",
-        targetPath
-      });
-
-      if (!readDecision.allowed) {
-        this.addAgentEvent(
-          "tool",
-          `Safety guard blocked @${mentionedFile.mention}: ${readDecision.reason}`
-        );
+      activeMarkdownFile: this.getActiveMarkdownFileInfo(),
+      app: this.app,
+      assess: (request) => this.assessSafetyRequest(request),
+      report: (text) => {
+        this.addAgentEvent("tool", text);
+      },
+      reportBlocked: (text) => {
+        this.addAgentEvent("tool", text);
         this.refreshDashboardViews();
-        return undefined;
-      }
-
-      if (file.extension.toLowerCase() === "pdf") {
-        blocks.push(await this.buildMentionedPdfContext(file));
-      } else if (canReadMentionedFileAsText(file)) {
-        const contents = await this.app.vault.read(file);
-        const text = limitContextText(contents);
-        blocks.push({
-          eventText: `Added @ context from ${file.path} (${text.length.toLocaleString()} chars).`,
-          promptPrefix: formatPromptContext("Mentioned file", file.path, text)
-        });
-      } else {
-        const attachmentContext = formatMentionedAttachmentContext(file);
-        blocks.push({
-          eventText: `Added @ attachment reference for ${file.path}.`,
-          promptPrefix: formatPromptContext(
-            "Mentioned attachment",
-            file.path,
-            attachmentContext
-          )
-        });
-      }
-
-      const directoryContext = this.buildMentionedFileDirectoryContext(file);
-      if (directoryContext) {
-        blocks.push(directoryContext);
-      }
-    }
-
-    return blocks;
-  }
-
-  private buildMentionedFileDirectoryContext(
-    file: TFile
-  ): PromptContextBlock | undefined {
-    const folderPath = getVaultFolderPath(file.path);
-    const targetPath = this.getVaultPathAbsolutePath(folderPath);
-    const readDecision = this.assessSafetyRequest({
-      description: `List vault directory for @ file: ${formatVaultFolderLabel(folderPath)}`,
-      kind: "read",
-      targetPath
-    });
-
-    if (!readDecision.allowed) {
-      this.addAgentEvent(
-        "tool",
-        `Safety guard blocked directory context for ${file.path}: ${readDecision.reason}`
-      );
-      this.refreshDashboardViews();
-      return undefined;
-    }
-
-    const directoryContext = formatVaultDirectoryContext(
-      file,
-      this.app.vault.getAllLoadedFiles()
-    );
-
-    return {
-      eventText: `Added directory context for ${formatVaultFolderLabel(folderPath)}.`,
-      promptPrefix: formatPromptContext(
-        "Vault directory listing",
-        formatVaultFolderLabel(folderPath),
-        directoryContext
-      )
+      },
+      settings: this.settings,
+      toAbsolutePath: (vaultPath) => this.getVaultPathAbsolutePath(vaultPath),
+      vaultRoot: this.getVaultRoot()
     };
-  }
-
-  private async buildMentionedPdfContext(file: TFile): Promise<PromptContextBlock> {
-    if (file.stat.size > MAX_PDF_CONTEXT_BYTES) {
-      return {
-        eventText: `Added @ PDF reference for ${file.path}; extraction skipped because the file is too large.`,
-        promptPrefix: formatPromptContext(
-          "Mentioned PDF attachment",
-          file.path,
-          formatMentionedAttachmentContext(
-            file,
-            `PDF text extraction skipped because the file is larger than ${(MAX_PDF_CONTEXT_BYTES / 1024 / 1024).toLocaleString()} MB.`
-          )
-        )
-      };
-    }
-
-    try {
-      const data = await this.app.vault.readBinary(file);
-      const extracted = extractPdfText(data, MAX_CONTEXT_CHARS);
-      if (!extracted.text) {
-        return {
-          eventText: `Added @ PDF reference for ${file.path}; no selectable text was extracted.`,
-          promptPrefix: formatPromptContext(
-            "Mentioned PDF attachment",
-            file.path,
-            formatMentionedAttachmentContext(file, extracted.warning)
-          )
-        };
-      }
-
-      return {
-        eventText: `Extracted @ PDF text from ${file.path} (${extracted.text.length.toLocaleString()} chars).`,
-        promptPrefix: formatPromptContext(
-          "Mentioned PDF text",
-          file.path,
-          [
-            `Path: ${file.path}`,
-            `Extracted text blocks: ${extracted.pageLikeBlocks}`,
-            extracted.warning ? `Warning: ${extracted.warning}` : "",
-            "",
-            extracted.text
-          ].filter(Boolean).join("\n")
-        )
-      };
-    } catch (error) {
-      return {
-        eventText: `Added @ PDF reference for ${file.path}; extraction failed.`,
-        promptPrefix: formatPromptContext(
-          "Mentioned PDF attachment",
-          file.path,
-          formatMentionedAttachmentContext(
-            file,
-            `PDF text extraction failed: ${getErrorMessage(error)}`
-          )
-        )
-      };
-    }
-  }
-
-  private async buildVaultSearchPromptContext(
-    query: string
-  ): Promise<PromptContextBlock[]> {
-    const [exactHits, relatedHits, indexSummary] = await Promise.all([
-      searchVault(this.app, query, 8),
-      findRelatedVaultNotes(this.app, query, 8),
-      buildVaultIndexSummary(this.app, 80)
-    ]);
-
-    return [
-      {
-        eventText: `Added vault search context for "${truncatePlainText(query, 48)}".`,
-        promptPrefix: formatPromptContext(
-          "Vault search",
-          "vault",
-          [
-            formatVaultSearchHits("Exact/metadata vault search", query, exactHits),
-            "",
-            formatVaultSearchHits("Related-note search", query, relatedHits),
-            "",
-            indexSummary
-          ].join("\n")
-        )
-      }
-    ];
-  }
-
-  private async buildDirectivePromptContext(
-    prompt: string
-  ): Promise<PromptContextBlock[] | undefined> {
-    const directives = extractPromptToolDirectives(prompt);
-    if (directives.length === 0) {
-      return [];
-    }
-
-    const blocks: PromptContextBlock[] = [];
-    for (const directive of directives) {
-      if (directive.kind === "search") {
-        const hits = await searchVault(this.app, directive.value, 10);
-        blocks.push({
-          eventText: `Ran vault search for "${directive.value}".`,
-          promptPrefix: formatPromptContext(
-            "Vault search",
-            `@search(${directive.value})`,
-            formatVaultSearchHits("Exact/metadata vault search", directive.value, hits)
-          )
-        });
-        continue;
-      }
-
-      if (directive.kind === "semantic") {
-        const hits = await findRelatedVaultNotes(this.app, directive.value, 10);
-        blocks.push({
-          eventText: `Ran related-note search for "${directive.value}".`,
-          promptPrefix: formatPromptContext(
-            "Related-note search",
-            `@semantic(${directive.value})`,
-            formatVaultSearchHits("Related-note search", directive.value, hits)
-          )
-        });
-        continue;
-      }
-
-      if (directive.kind === "index") {
-        blocks.push({
-          eventText: "Added vault filename/header index.",
-          promptPrefix: formatPromptContext(
-            "Vault filename and heading index",
-            "vault",
-            await buildVaultIndexSummary(this.app)
-          )
-        });
-        continue;
-      }
-
-      if (directive.kind === "url") {
-        if (!this.settings.webFetchEnabled) {
-          this.addAgentEvent("tool", "Blocked URL fetch: web fetch is disabled.");
-          continue;
-        }
-
-        const result = await fetchUrlText(
-          directive.value,
-          parseAllowedHosts(this.settings.webFetchAllowedHosts)
-        );
-        blocks.push({
-          eventText: result.error
-            ? `URL fetch failed for ${directive.value}: ${result.error}`
-            : `Fetched URL context from ${result.url}.`,
-          promptPrefix: formatPromptContext(
-            "Fetched URL",
-            result.url,
-            result.error
-              ? `Fetch failed: ${result.error}`
-              : [`Title: ${result.title ?? "unknown"}`, "", result.content].join("\n")
-          )
-        });
-        continue;
-      }
-
-      if (directive.kind === "cmd") {
-        const allowedCommands = parseAllowedCommands(this.settings.safeCommandAllowlist);
-        const commandAllowed = allowedCommands.includes(
-          directive.value.trim().replace(/\s+/g, " ")
-        );
-        const decision = this.assessSafetyRequest({
-          command: directive.value,
-          description: `Run safe command: ${directive.value}`,
-          kind: commandAllowed ? "safe-command" : "shell"
-        });
-        if (!decision.allowed) {
-          blocks.push({
-            eventText: `Blocked command context: ${decision.reason}`,
-            promptPrefix: formatPromptContext(
-              "Safe command output",
-              directive.value,
-              `Command blocked: ${decision.reason}`
-            )
-          });
-          continue;
-        }
-
-        const result = await runAllowedCommand(
-          directive.value,
-          allowedCommands,
-          this.getVaultRoot()
-        );
-        blocks.push({
-          eventText: result.success
-            ? `Ran safe command: ${result.command}`
-            : `Safe command blocked or failed: ${result.command}`,
-          promptPrefix: formatPromptContext(
-            "Safe command output",
-            result.command,
-            [
-              `Command: ${result.command}`,
-              `Success: ${result.success}`,
-              result.exitCode === undefined ? "" : `Exit code: ${result.exitCode}`,
-              "",
-              result.output
-            ].filter(Boolean).join("\n")
-          )
-        });
-        continue;
-      }
-
-      if (directive.kind === "links") {
-        const file = directive.value
-          ? this.app.vault.getFileByPath(normalizeMentionedPath(directive.value))
-          : this.app.workspace.getActiveFile() ?? this.getActiveMarkdownFileInfo()?.file;
-        if (!file) {
-          this.addAgentEvent("tool", "Internal link suggestions skipped: note not found.");
-          continue;
-        }
-
-        const proposal = await proposeInternalLinksForFile(this.app, file);
-        blocks.push({
-          eventText: `Added internal link suggestions for ${file.path}.`,
-          promptPrefix: formatPromptContext(
-            "Internal link suggestions",
-            file.path,
-            formatInternalLinkSuggestions(file.path, proposal.suggestions)
-          )
-        });
-      }
-    }
-
-    return blocks;
   }
 
   private getActiveMarkdownFileInfo(): MarkdownFileInfo | null {
@@ -2653,12 +2228,15 @@ export default class AgentDashboardPlugin extends Plugin {
   private startReadOnlyPiPrompt(
     prompt: string,
     sessionPath: string | undefined,
-    toolMode: "disabled" | "read-only",
+    toolMode: PiToolMode,
     workspaceRoot: string | undefined
   ): void {
     let assistantText = "";
     let assistantEventId: string | undefined;
     const selectedModel = this.settings.selectedPiModel;
+    // Stands in for the run's lifecycle chatter until real output arrives.
+    const thinkingEventId = this.addAgentEvent("status", "Thinking...").id;
+    const clearThinking = () => this.removeAgentEvent(thinkingEventId);
 
     this.activePromptRun = new PiReadOnlyPromptRun(
       {
@@ -2669,21 +2247,28 @@ export default class AgentDashboardPlugin extends Plugin {
         timeoutMs: this.settings.piPromptTimeoutMinutes * 60_000,
         toolMode,
         workspaceRoot,
-        allowExperimentalPiFeatures: this.settings.piExperimentalFeaturesEnabled
+        allowExperimentalPiFeatures: this.settings.allowPiUserConfig
       },
       {
         onAssistantDelta: (delta) => {
           assistantText += delta;
           if (!assistantEventId) {
+            // First delta adds an element, so the stream needs a full render.
+            clearThinking();
             assistantEventId = this.addAgentEvent("assistant", assistantText).id;
-          } else {
-            this.updateAgentEvent(assistantEventId, assistantText);
+            this.refreshDashboardViews();
+            return;
           }
-          this.refreshDashboardViews();
+
+          const event = this.updateAgentEvent(assistantEventId, assistantText);
+          if (event) {
+            this.refreshStreamedEvent(event);
+          }
         },
         onError: (message) => {
           this.activePromptRun = undefined;
           this.agentSessionStatus = "error";
+          clearThinking();
           this.addAgentEvent("status", `Pi read-only prompt failed: ${message}`);
           this.refreshDashboardViews();
         },
@@ -2691,19 +2276,32 @@ export default class AgentDashboardPlugin extends Plugin {
           this.rememberPiSessionState(state);
           this.refreshDashboardViews();
         },
+        onComplete: (reason) => {
+          if (reason === "completed") {
+            void this.recordProposedEdits(assistantEventId, assistantText);
+          }
+
+          this.activePromptRun = undefined;
+          this.agentSessionStatus = "idle";
+          clearThinking();
+          void this.flushPluginDataSave();
+          this.refreshDashboardViews();
+
+          if (reason === "completed") {
+            this.dispatchQueuedPrompt();
+          }
+        },
         onStatus: (message) => {
           if (isPiToolSupportErrorStatus(message)) {
             new Notice("Selected model does not support Pi tools. Disable Pi tools or choose another model.");
           }
 
-          if (message.includes("complete") || message.includes("stopped")) {
-            if (message.includes("complete")) {
-              void this.recordProposedEdits(assistantEventId, assistantText);
-            }
-            this.activePromptRun = undefined;
-            this.agentSessionStatus = "idle";
+          // Per-phase chatter would bury the reply, so only actionable
+          // statuses earn a line in the stream.
+          if (!isPiRunPhaseNoise(message)) {
+            this.addAgentEvent("status", message);
           }
-          this.addAgentEvent("status", message);
+
           this.refreshDashboardViews();
         },
         onToolEvent: (event) => {
@@ -2713,12 +2311,17 @@ export default class AgentDashboardPlugin extends Plugin {
             return;
           }
 
-          const decision = this.assessSafetyRequest({
-            description: event.title,
+          // Pi has already run this. There is nothing to approve after the
+          // fact, so record it as a warning rather than queueing a decision.
+          this.assessSafetyRequest({
+            description: `Pi used a tool outside the requested mode: ${event.title}`,
             kind: "shell"
           });
-          this.enqueueApproval(decision);
-          this.addToolEvent(createBlockedToolEvent(event));
+          this.addToolEvent(createUnexpectedToolEvent(event));
+          this.addAgentEvent(
+            "status",
+            `Pi ran "${event.name ?? event.title}", which is outside the tools Local Sidekick requested. This is reported after the fact; the plugin cannot stop Pi's tool calls.`
+          );
           this.refreshDashboardViews();
         }
       }
@@ -2727,1023 +2330,53 @@ export default class AgentDashboardPlugin extends Plugin {
     this.activePromptRun.start();
   }
 
-  private updateAgentEvent(id: string, text: string): void {
-    const event = this.agentEvents.find((item) => item.id === id);
-    if (event) {
-      event.text = text;
-      this.queuePluginDataSave();
-    }
-  }
-}
-
-function formatPromptContext(label: string, filePath: string, text: string): string {
-  return [
-    `<obsidian-context label="${label}" path="${filePath}">`,
-    text,
-    "</obsidian-context>"
-  ].join("\n");
-}
-
-function formatPiExperimentalFeatureFlag(enabled: boolean): string {
-  return enabled
-    ? "--experimental-pi-features"
-    : "--no-extensions --no-skills --no-prompt-templates --no-context-files";
-}
-
-function formatPiToolFlag(toolMode: "disabled" | "read-only"): string {
-  if (toolMode === "read-only") {
-    return "--tools read,grep,find,ls";
-  }
-
-  return "--no-tools";
-}
-
-function describePiToolMode(toolMode: "disabled" | "read-only"): string {
-  if (toolMode === "read-only") {
-    return "read-only tools: read, grep, find, ls";
-  }
-
-  return "tools disabled";
-}
-
-function isPiToolSupportErrorStatus(message: string): boolean {
-  return /does not support Pi\/Ollama tool calls/i.test(message);
-}
-
-function getVaultGroundingInstructions(): string {
-  return [
-    "<vault-grounding-instructions>",
-    "Use only the Obsidian context blocks supplied in this prompt as authoritative vault/project evidence.",
-    "Tool-style context blocks such as Vault search, Related-note search, Safe command output, Fetched URL, and Internal link suggestions are generated by the plugin before the model runs.",
-    "Do not invent vault files, sibling files, folder contents, citations, or code paths that are not present in the supplied file contents or directory listings.",
-    "When asked what files exist in a folder, answer from the supplied Vault directory listing. If the listing does not include a file, say it is not present in the provided listing.",
-    "</vault-grounding-instructions>"
-  ].join("\n");
-}
-
-function extractPromptToolDirectives(prompt: string): PromptToolDirective[] {
-  const directives: PromptToolDirective[] = [];
-  for (const match of prompt.matchAll(/@(search|semantic|url|cmd|links)\(([^)]{1,600})\)/gi)) {
-    const kind = match[1].toLowerCase() as PromptToolDirective["kind"];
-    directives.push({
-      kind,
-      value: match[2].trim()
-    });
-  }
-
-  if (/(^|\s)@vault-index(\s|$)/i.test(prompt)) {
-    directives.push({ kind: "index", value: "" });
-  }
-
-  if (/(^|\s)@links(\s|$)/i.test(prompt)) {
-    directives.push({ kind: "links", value: "" });
-  }
-
-  return directives;
-}
-
-function isKnownPromptToolDirective(value: string): boolean {
-  return /^(search|semantic|url|cmd|links)\(/i.test(value) || /^(vault-index|links)$/i.test(value);
-}
-
-function formatVaultDirectoryContext(
-  referencedFile: TFile,
-  loadedFiles: TAbstractFile[]
-): string {
-  const folderPath = getVaultFolderPath(referencedFile.path);
-  const directChildren = loadedFiles
-    .filter((item) => item.path !== folderPath)
-    .filter((item) => getVaultFolderPath(item.path) === folderPath)
-    .sort(compareVaultFiles);
-  const folders = directChildren.filter(
-    (item): item is TFolder => item instanceof TFolder
-  );
-  const files = directChildren.filter(
-    (item): item is TFile => item instanceof TFile
-  );
-  const markdownFiles = files.filter((item) => item.extension === "md");
-  const otherFiles = files.filter((item) => item.extension !== "md");
-  const hiddenCount =
-    getOmittedDirectoryItemCount(folders) +
-    getOmittedDirectoryItemCount(markdownFiles) +
-    getOmittedDirectoryItemCount(otherFiles);
-
-  return [
-    `Referenced file: ${referencedFile.path}`,
-    `Parent folder: ${formatVaultFolderLabel(folderPath)}`,
-    "",
-    "Exact direct children currently visible in the vault:",
-    formatDirectorySection("Folders", folders.map((item) => item.path)),
-    formatDirectorySection("Markdown files", markdownFiles.map((item) => item.path)),
-    formatDirectorySection("Other files", otherFiles.map((item) => item.path)),
-    hiddenCount > 0
-      ? `Additional entries omitted from this listing: ${hiddenCount}`
-      : "Additional entries omitted from this listing: 0",
-    "",
-    "This is a directory listing, not a list of inferred or likely files."
-  ].join("\n");
-}
-
-function formatDirectorySection(label: string, paths: string[]): string {
-  const visiblePaths = paths.slice(0, MAX_DIRECTORY_CONTEXT_ITEMS);
-  if (visiblePaths.length === 0) {
-    return `${label}:\n- (none)`;
-  }
-
-  return [
-    `${label}:`,
-    ...visiblePaths.map((item) => `- ${item}`)
-  ].join("\n");
-}
-
-function getOmittedDirectoryItemCount(items: TAbstractFile[]): number {
-  return Math.max(0, items.length - MAX_DIRECTORY_CONTEXT_ITEMS);
-}
-
-function compareVaultFiles(left: TAbstractFile, right: TAbstractFile): number {
-  const leftFolder = left instanceof TFolder;
-  const rightFolder = right instanceof TFolder;
-  if (leftFolder !== rightFolder) {
-    return leftFolder ? -1 : 1;
-  }
-
-  return left.path.localeCompare(right.path);
-}
-
-function getVaultFolderPath(vaultPath: string): string {
-  const folderPath = path.posix.dirname(vaultPath);
-  return folderPath === "." ? "" : folderPath;
-}
-
-function formatVaultFolderLabel(folderPath: string): string {
-  return folderPath || "/";
-}
-
-function canReadMentionedFileAsText(file: TFile): boolean {
-  return TEXT_CONTEXT_EXTENSIONS.has(file.extension.toLowerCase());
-}
-
-function formatMentionedAttachmentContext(file: TFile, warning?: string): string {
-  const extension = file.extension || "none";
-  const size = Number.isFinite(file.stat.size)
-    ? `${file.stat.size.toLocaleString()} bytes`
-    : "unknown";
-
-  return [
-    `Path: ${file.path}`,
-    `Extension: ${extension}`,
-    `Size: ${size}`,
-    "",
-    "This file was referenced from the vault but its contents were not extracted as text.",
-    "For PDFs or other binary attachments, do not infer the document contents unless another extracted text context is supplied.",
-    warning ? `Warning: ${warning}` : ""
-  ].filter(Boolean).join("\n");
-}
-
-function getEditProposalInstructions(): string {
-  return [
-    "<local-sidekick-edit-format>",
-    "If you propose changes to vault files, include each full-file replacement in this exact fenced format:",
-    "```agent-edit",
-    "path: path/inside/vault.md",
-    "---",
-    "replacement file contents",
-    "```",
-    "Use this format for reviewed note creation, note updates, frontmatter updates, move/rename notes expressed as replacement files, and conservative internal-linking suggestions.",
-    "Do not claim that edits have been applied. The dashboard will show a diff and require approval.",
-    "</local-sidekick-edit-format>"
-  ].join("\n");
-}
-
-const READ_ONLY_PI_TOOL_NAMES = new Set(["find", "grep", "ls", "read"]);
-
-function isReadOnlyPiToolEvent(event: PiToolEvent): boolean {
-  const toolName = event.name?.trim().toLowerCase();
-  return toolName !== undefined && READ_ONLY_PI_TOOL_NAMES.has(toolName);
-}
-
-function createPiToolEvent(event: PiToolEvent): AgentToolEvent {
-  return {
-    callId: event.callId,
-    eventType: event.eventType,
-    input: event.input,
-    name: event.name,
-    output: event.output,
-    raw: event.raw,
-    status: event.status,
-    title: event.title
-  };
-}
-
-function createBlockedToolEvent(event: PiToolEvent): AgentToolEvent {
-  return {
-    callId: event.callId,
-    eventType: event.eventType,
-    input: event.input,
-    name: event.name,
-    output: event.output,
-    raw: event.raw,
-    status: "blocked",
-    title: `Blocked ${event.title}`
-  };
-}
-
-interface ChatExportOptions {
-  exportedAt: string;
-  model: string;
-  pluginVersion: string;
-}
-
-class AgentChatExportModal extends Modal {
-  private plugin: AgentDashboardPlugin;
-
-  constructor(app: App, plugin: AgentDashboardPlugin) {
-    super(app);
-    this.plugin = plugin;
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl("h2", { text: "Export Chat" });
-    contentEl.createEl("p", {
-      text: "Choose a vault path. The default folder is created if needed."
-    });
-
-    const inputEl = contentEl.createEl("input", {
-      attr: {
-        type: "text"
-      },
-      cls: "agent-dashboard__export-path-input"
-    });
-    inputEl.value = this.plugin.getSuggestedChatExportPath();
-    inputEl.focus();
-    inputEl.select();
-
-    const actionsEl = contentEl.createDiv({
-      cls: "agent-dashboard__export-actions"
-    });
-    new ButtonComponent(actionsEl)
-      .setButtonText("Cancel")
-      .onClick(() => {
-        this.close();
-      });
-    new ButtonComponent(actionsEl)
-      .setCta()
-      .setButtonText("Export")
-      .onClick(() => {
-        void this.plugin.exportActiveAgentChat(inputEl.value);
-        this.close();
-      });
-
-    inputEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        void this.plugin.exportActiveAgentChat(inputEl.value);
-        this.close();
-      }
-    });
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-  }
-}
-
-function buildChatExportMarkdown(
-  record: PersistedAgentSessionRecord,
-  options: ChatExportOptions
-): string {
-  const title = record.title || record.name;
-  const lines = [
-    "---",
-    `title: ${quoteYamlString(title)}`,
-    `agent_session: ${quoteYamlString(record.name)}`,
-    `exported_at: ${quoteYamlString(options.exportedAt)}`,
-    `model: ${quoteYamlString(options.model || "unknown")}`,
-    `plugin_version: ${quoteYamlString(options.pluginVersion)}`,
-    record.piSessionId
-      ? `pi_session_id: ${quoteYamlString(record.piSessionId)}`
-      : "",
-    `message_count: ${countConversationMessages(record.events ?? [])}`,
-    "---",
-    "",
-    `# ${title}`,
-    "",
-    `Exported: ${options.exportedAt}`,
-    "",
-    `Session: \`${record.name}\``,
-    options.model ? `Model: \`${options.model}\`` : "",
-    "",
-    ...formatChatExportEvents(record.events ?? [])
-  ].filter((line) => line !== undefined);
-
-  return `${lines.join("\n")}\n`;
-}
-
-function formatChatExportEvents(events: AgentEvent[]): string[] {
-  const lines: string[] = [];
-  for (const event of events) {
-    if (event.kind === "status") {
-      lines.push(
-        `> **Status ${formatExportTimestamp(event.createdAt)}:** ${event.text}`,
-        ""
-      );
-      continue;
-    }
-
-    if (event.kind === "tool") {
-      lines.push(
-        `<details>`,
-        `<summary>Tool · ${escapeHtml(event.tool?.title ?? event.text)}</summary>`,
-        "",
-        ...formatToolExport(event),
-        "",
-        `</details>`,
-        ""
-      );
-      continue;
-    }
-
-    lines.push(
-      `## ${getExportEventHeading(event)}`,
-      "",
-      event.text.trim() || "_No content_",
-      ""
-    );
-  }
-
-  return lines;
-}
-
-function formatToolExport(event: AgentEvent): string[] {
-  const tool = event.tool;
-  if (!tool) {
-    return [event.text.trim() || "_No details_"];
-  }
-
-  const lines = [
-    `- Status: \`${tool.status}\``,
-    `- Event: \`${tool.eventType}\``,
-    tool.name ? `- Name: \`${tool.name}\`` : "",
-    tool.callId ? `- Call ID: \`${tool.callId}\`` : "",
-    ""
-  ].filter(Boolean);
-
-  if (tool.input !== undefined) {
-    lines.push("Input:", "", "```json", formatJsonForMarkdown(tool.input), "```", "");
-  }
-
-  if (tool.output !== undefined) {
-    lines.push(
-      tool.status === "error" ? "Error:" : "Output:",
-      "",
-      "```json",
-      formatJsonForMarkdown(tool.output),
-      "```",
-      ""
-    );
-  }
-
-  return lines;
-}
-
-function formatJsonForMarkdown(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function getExportEventHeading(event: AgentEvent): string {
-  const label =
-    event.kind === "assistant" ? "Agent" : event.kind === "user" ? "You" : "Event";
-  return `${label} - ${formatExportTimestamp(event.createdAt)}`;
-}
-
-function formatExportTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  return date.toLocaleString();
-}
-
-function quoteYamlString(value: string): string {
-  return JSON.stringify(value);
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function normalizeChatExportPath(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error("Export path cannot be empty.");
-  }
-
-  let normalized = path.posix
-    .normalize(trimmed.replace(/^\/+/, ""))
-    .replace(/^\.\//, "");
-  if (
-    !normalized ||
-    normalized === "." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    throw new Error("Export path must stay inside the vault.");
-  }
-
-  if (!normalized.toLowerCase().endsWith(".md")) {
-    normalized = `${normalized}.md`;
-  }
-
-  return normalized;
-}
-
-function normalizeVaultFolderPath(value: string): string {
-  return path.posix
-    .normalize(value.replace(/^\/+/, ""))
-    .replace(/^\.\//, "")
-    .replace(/\/+$/, "");
-}
-
-function slugifyFileName(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9._ -]+/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-.]+|[-.]+$/g, "")
-    .slice(0, 72);
-
-  return slug || "chat";
-}
-
-function getPersistedSettings(data: unknown): Partial<AgentDashboardSettings> {
-  const record = asPlainRecord(data);
-  if (!record) {
-    return {};
-  }
-
-  if (asPlainRecord(record.settings)) {
-    return record.settings as Partial<AgentDashboardSettings>;
-  }
-
-  return record;
-}
-
-function getPersistedAgentSession(
-  data: unknown
-): PersistedAgentSessionState | undefined {
-  const record = asPlainRecord(data);
-  const session = asPlainRecord(record?.agentSession);
-  return session;
-}
-
-function getPersistedAgentSessions(
-  data: unknown
-): PersistedAgentSessionsState | undefined {
-  const record = asPlainRecord(data);
-  const sessions = asPlainRecord(record?.agentSessions);
-  return sessions;
-}
-
-function isPersistedAgentSessionRecord(
-  value: unknown
-): value is PersistedAgentSessionRecord {
-  const record = asPlainRecord(value);
-  return typeof record?.name === "string" && typeof record.title === "string";
-}
-
-function getHistoryItemForSessionRecord(
-  record: PersistedAgentSessionRecord
-): AgentSessionHistoryItem {
-  return {
-    createdAt: record.createdAt,
-    lastMessage: record.lastMessage ?? getSessionLastMessage(record.events ?? []),
-    messageCount:
-      record.messageCount ??
-      record.piSessionMessageCount ??
-      countConversationMessages(record.events ?? []),
-    name: record.name,
-    piSessionId: record.piSessionId,
-    title: record.title,
-    updatedAt: record.updatedAt ?? record.createdAt
-  };
-}
-
-function getSessionTitle(events: AgentEvent[], fallback: string): string {
-  const userEvent = events.find((event) => event.kind === "user");
-  const title = userEvent?.text.trim() || fallback;
-  return truncatePlainText(title, 56);
-}
-
-function getSessionLastMessage(events: AgentEvent[]): string {
-  const event = [...events]
-    .reverse()
-    .find((item) => item.kind === "assistant" || item.kind === "user");
-  return event ? truncatePlainText(event.text, 96) : "";
-}
-
-function countConversationMessages(events: AgentEvent[]): number {
-  return events.filter(
-    (event) => event.kind === "assistant" || event.kind === "user"
-  ).length;
-}
-
-function buildPiPromptTemplate(profile: SidekickProfile): string {
-  const lines = [
-    "---",
-    "description: " + yamlScalar(profile.description || `Local Sidekick profile ${profile.name}`),
-    profile.modelLabels[0] ? "model: " + yamlScalar(profile.modelLabels[0]) : "",
-    "---",
-    "",
-    "# " + profile.name,
-    "",
-    profile.prompt,
-    ""
-  ].filter(Boolean);
-
-  if (profile.includePaths.length > 0) {
-    lines.push(
-      "## Local Sidekick Memory Includes",
-      "",
-      "When running through Local Sidekick these files are injected automatically. When running Pi directly, add or read them explicitly as needed.",
-      "",
-      ...profile.includePaths.map((includePath) => "- " + includePath),
-      ""
-    );
-  }
-
-  return lines.join("\n") + "\n";
-}
-
-function buildPiSkillResource(
-  name: string,
-  description: string,
-  instructions: string[]
-): string {
-  return [
-    "---",
-    "name: " + yamlScalar(name),
-    "description: " + yamlScalar(description),
-    "---",
-    "",
-    "# " + name,
-    "",
-    ...instructions.map((instruction) => "- " + instruction),
-    ""
-  ].join("\n");
-}
-
-function mergeStringSetting(value: unknown, entry: string): string[] {
-  const values = Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-  if (!values.includes(entry)) {
-    values.push(entry);
-  }
-
-  return values;
-}
-
-function sanitizePiResourceName(value: string): string {
-  return slugifyFileName(value).replace(/\.md$/i, "") || "sidekick-profile";
-}
-
-function yamlScalar(value: string): string {
-  return JSON.stringify(value);
-}
-
-function sanitizeProjectIndexText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function truncatePlainText(value: string, maxLength: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, Math.max(maxLength - 3, 0))}...`;
-}
-
-function normalizeSettings(
-  settings: AgentDashboardSettings
-): AgentDashboardSettings {
-  return {
-    ...settings,
-    agentSessionName:
-      settings.agentSessionName?.trim() || DEFAULT_SETTINGS.agentSessionName,
-    ollamaHost: settings.ollamaHost?.trim() || DEFAULT_SETTINGS.ollamaHost,
-    piExecutablePath:
-      settings.piExecutablePath?.trim() || DEFAULT_SETTINGS.piExecutablePath,
-    piPromptTimeoutMinutes: normalizePiPromptTimeout(
-      settings.piPromptTimeoutMinutes
-    ),
-    piToolMode: settings.piToolMode === "read-only" ? "read-only" : "disabled",
-    piExperimentalFeaturesEnabled: settings.piExperimentalFeaturesEnabled === true,
-    selectedAgentProfilePath: settings.selectedAgentProfilePath?.trim() ?? "",
-    sidekickRootFolder: normalizeSidekickRoot(settings.sidekickRootFolder),
-    statusPanelHeight: normalizeStatusPanelHeight(settings.statusPanelHeight),
-    safeCommandAllowlist:
-      settings.safeCommandAllowlist ?? DEFAULT_SETTINGS.safeCommandAllowlist,
-    webFetchAllowedHosts:
-      settings.webFetchAllowedHosts ?? DEFAULT_SETTINGS.webFetchAllowedHosts,
-    webFetchEnabled: settings.webFetchEnabled === true
-  };
-}
-
-function normalizePiPromptTimeout(value: unknown): number {
-  const timeout = typeof value === "number" ? value : DEFAULT_SETTINGS.piPromptTimeoutMinutes;
-  if (!Number.isFinite(timeout)) {
-    return DEFAULT_SETTINGS.piPromptTimeoutMinutes;
-  }
-
-  return Math.min(30, Math.max(2, Math.round(timeout)));
-}
-
-function normalizeStatusPanelHeight(value: unknown): number {
-  const height = typeof value === "number" ? value : DEFAULT_SETTINGS.statusPanelHeight;
-  if (!Number.isFinite(height)) {
-    return DEFAULT_SETTINGS.statusPanelHeight;
-  }
-
-  return Math.min(420, Math.max(96, Math.round(height)));
-}
-
-function createAgentSessionName(): string {
-  const stamp = new Date()
-    .toISOString()
-    .replace(/\.\d{3}Z$/, "")
-    .replace(/[^\dT]/g, "")
-    .replace("T", "-");
-
-  return `session-${stamp}`;
-}
-
-function sanitizeSessionFileName(value: string): string {
-  const sanitized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  return sanitized || DEFAULT_SETTINGS.agentSessionName;
-}
-
-function getMaxIdCounter(records: { id: string }[], prefix: string): number {
-  return records.reduce((max, record) => {
-    if (!record.id.startsWith(prefix)) {
-      return max;
-    }
-
-    const value = Number(record.id.slice(prefix.length));
-    return Number.isFinite(value) ? Math.max(max, value) : max;
-  }, 0);
-}
-
-function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-
-  return undefined;
-}
-
-function limitContextText(value: string): string {
-  if (value.length <= MAX_CONTEXT_CHARS) {
-    return value;
-  }
-
-  return `${value.slice(0, MAX_CONTEXT_CHARS)}\n\n[Context truncated to ${MAX_CONTEXT_CHARS.toLocaleString()} characters.]`;
-}
-
-function normalizeProposedEditPath(value: string): string {
-  const normalized = path.posix
-    .normalize(value.replace(/^["']|["']$/g, "").replace(/^\/+/, "").trim())
-    .replace(/^\.\//, "");
-
-  if (
-    !normalized ||
-    normalized === "." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    return "";
-  }
-
-  return normalized;
-}
-
-function extractMentionedVaultFileReferences(
-  prompt: string,
-  files: TFile[]
-): MentionedVaultFileReference[] {
-  const references: MentionedVaultFileReference[] = [];
-  const seenFiles = new Set<string>();
-  const candidates = files
-    .flatMap((file) =>
-      getMentionedPathCandidates(file.path).map((candidate) => ({
-        candidate,
-        file
-      }))
-    )
-    .sort((a, b) => b.candidate.length - a.candidate.length);
-
-  for (const { candidate, file } of candidates) {
-    if (seenFiles.has(file.path)) {
-      continue;
-    }
-
-    const mention = `@${candidate}`;
-    let start = prompt.indexOf(mention);
-
-    while (start !== -1) {
-      const end = start + mention.length;
-      if (
-        isMentionBoundary(prompt, start, end) &&
-        !references.some((reference) => rangesOverlap(reference, { start, end }))
-      ) {
-        references.push({
-          end,
-          file,
-          mention: candidate,
-          start
-        });
-        seenFiles.add(file.path);
-        break;
-      }
-
-      start = prompt.indexOf(mention, start + 1);
-    }
-  }
-
-  for (const match of prompt.matchAll(/@\[\[([^\]]+)\]\]/g)) {
-    if (match.index === undefined) {
-      continue;
-    }
-
-    const start = match.index;
-    const end = start + match[0].length;
-    if (references.some((reference) => rangesOverlap(reference, { start, end }))) {
-      continue;
-    }
-
-    const file = resolveWikiLinkFile(match[1], files);
-    if (!file || seenFiles.has(file.path)) {
-      continue;
-    }
-
-    references.push({
-      end,
-      file,
-      mention: `[[${match[1]}]]`,
-      start
-    });
-    seenFiles.add(file.path);
-  }
-
-  return references.sort((a, b) => a.start - b.start);
-}
-
-function extractUnresolvedMentionedVaultPaths(
-  prompt: string,
-  resolvedReferences: MentionedVaultFileReference[]
-): string[] {
-  const matches = prompt.matchAll(/(^|\s)@([^\s@]+)/g);
-  const paths: string[] = [];
-  const seenPaths = new Set<string>();
-
-  for (const match of matches) {
-    if (match.index === undefined) {
-      continue;
-    }
-
-    const start = match.index + match[1].length;
-    const end = start + match[0].length - match[1].length;
-    if (
-      resolvedReferences.some((reference) =>
-        rangesOverlap(reference, { start, end })
-      )
-    ) {
-      continue;
-    }
-
-    const rawPath = normalizeMentionedPath(match[2]);
-    if (!rawPath || isKnownPromptToolDirective(rawPath) || seenPaths.has(rawPath)) {
-      continue;
-    }
-
-    seenPaths.add(rawPath);
-    paths.push(rawPath);
-  }
-
-  return paths;
-}
-
-function normalizeMentionedPath(value: string): string {
-  return value
-    .replace(/[),.;:!?]+$/, "")
-    .replace(/^\/+/, "")
-    .trim();
-}
-
-function resolveWikiLinkFile(value: string, files: TFile[]): TFile | undefined {
-  const target = value
-    .split("|")[0]
-    .split("#")[0]
-    .replace(/^\/+/, "")
-    .trim();
-  if (!target) {
-    return undefined;
-  }
-
-  const candidates = getMentionedPathCandidates(target);
-  return files.find((file) => {
-    const withoutExtension = stripVaultFileExtension(file.path);
-    const basename = path.basename(withoutExtension);
-    return candidates.some(
-      (candidate) =>
-        file.path === candidate ||
-        withoutExtension === candidate ||
-        basename === candidate
-    );
-  });
-}
-
-function getMentionedPathCandidates(mentionedPath: string): string[] {
-  const candidates = [mentionedPath];
-  const extension = path.extname(mentionedPath);
-
-  if (!extension) {
-    candidates.push(`${mentionedPath}.md`);
-    candidates.push(`${mentionedPath}.pdf`);
-  } else {
-    candidates.push(stripVaultFileExtension(mentionedPath));
-  }
-
-  return Array.from(new Set(candidates));
-}
-
-function stripVaultFileExtension(vaultPath: string): string {
-  const extension = path.extname(vaultPath);
-  return extension ? vaultPath.slice(0, -extension.length) : vaultPath;
-}
-
-function isMentionBoundary(prompt: string, start: number, end: number): boolean {
-  const before = prompt[start - 1];
-  const after = prompt[end];
-  const validBefore = before === undefined || /\s|[([{]/.test(before);
-  const validAfter = after === undefined || /\s|[),.;:!?}\]]/.test(after);
-
-  return validBefore && validAfter;
-}
-
-function rangesOverlap(
-  left: { end: number; start: number },
-  right: { end: number; start: number }
-): boolean {
-  return left.start < right.end && right.start < left.end;
-}
-
-function scoreVaultFileSuggestion(filePath: string, query: string): number {
-  if (!query) {
-    return 10;
-  }
-
-  const normalizedPath = filePath.toLowerCase();
-  const fileName = path.basename(normalizedPath);
-
-  if (normalizedPath === query) {
-    return 0;
-  }
-
-  if (normalizedPath.startsWith(query)) {
-    return 1;
-  }
-
-  if (fileName.startsWith(query)) {
-    return 2;
-  }
-
-  if (normalizedPath.includes(query)) {
-    return 3;
-  }
-
-  if (isFuzzyMatch(normalizedPath, query)) {
-    return 4;
-  }
-
-  return Number.POSITIVE_INFINITY;
-}
-
-function isFuzzyMatch(value: string, query: string): boolean {
-  let queryIndex = 0;
-  for (const char of value) {
-    if (char === query[queryIndex]) {
-      queryIndex += 1;
-    }
-
-    if (queryIndex === query.length) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function confirmLocalRisk(
-  app: App,
-  title: string,
-  message: string
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    new ConfirmationModal(app, title, message, resolve).open();
-  });
-}
-
-class ConfirmationModal extends Modal {
-  private readonly onResolve: (confirmed: boolean) => void;
-  private readonly message: string;
-  private readonly titleText: string;
-  private resolved = false;
-
-  constructor(
-    app: App,
-    title: string,
-    message: string,
-    onResolve: (confirmed: boolean) => void
-  ) {
-    super(app);
-    this.titleText = title;
-    this.message = message;
-    this.onResolve = onResolve;
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl("h2", { text: this.titleText });
-
-    for (const paragraph of this.message.split(/\n\n+/)) {
-      contentEl.createEl("p", { text: paragraph });
-    }
-
-    const actionsEl = contentEl.createDiv({
-      cls: "agent-dashboard__export-actions"
-    });
-    new ButtonComponent(actionsEl)
-      .setButtonText("Cancel")
-      .onClick(() => this.finish(false));
-    new ButtonComponent(actionsEl)
-      .setButtonText("Continue")
-      .setCta()
-      .onClick(() => this.finish(true));
-  }
-
-  onClose(): void {
-    this.finish(false);
-  }
-
-  private finish(confirmed: boolean): void {
-    if (this.resolved) {
+  /**
+   * Sends a queued prompt once the current run has fully settled. Deferred to a
+   * fresh task so it does not start a run from inside the previous run's
+   * completion callback.
+   */
+  private dispatchQueuedPrompt(): void {
+    const queued = this.queuedPrompt;
+    if (!queued) {
       return;
     }
 
-    this.resolved = true;
-    this.onResolve(confirmed);
-    this.close();
-  }
-}
+    this.queuedPrompt = undefined;
+    window.setTimeout(() => {
+      if (this.agentSessionStatus === "running") {
+        // Something else claimed the turn; put it back rather than drop it.
+        this.queuedPrompt = queued;
+        this.refreshDashboardViews();
+        return;
+      }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function describeSafetyRequest(request: SafetyRequest): string {
-  if (request.description) {
-    return request.description;
+      void this.sendAgentPrompt(queued.prompt, queued.contextMode);
+    }, 0);
   }
 
-  if (request.command) {
-    return request.command;
+  private removeAgentEvent(id: string): void {
+    const index = this.agentEvents.findIndex((event) => event.id === id);
+    if (index === -1) {
+      return;
+    }
+
+    this.agentEvents.splice(index, 1);
   }
 
-  if (request.targetPath) {
-    return request.targetPath;
-  }
+  private updateAgentEvent(id: string, text: string): AgentEvent | undefined {
+    const event = this.agentEvents.find((item) => item.id === id);
+    if (!event) {
+      return undefined;
+    }
 
-  return request.kind;
+    event.text = text;
+    // Each save rewrites the whole of data.json (every session, event, and
+    // proposed edit), so streaming deltas do not queue one. The run's terminal
+    // status event flushes the final text.
+    if (this.agentSessionStatus !== "running") {
+      this.queuePluginDataSave();
+    }
+
+    return event;
+  }
 }

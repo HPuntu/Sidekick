@@ -1,5 +1,58 @@
 ## Unreleased
 
+First stable release. The plugin's behaviour and boundaries are now documented
+accurately: it reads your vault by default, writes only with per-edit approval,
+and one clearly-labelled setting hands control of Pi back to your own
+configuration.
+
+### Added
+
+- Queue a prompt while a reply is streaming. The Send button becomes Queue, the pending prompt is shown above the composer with a Cancel action, and it is sent automatically when the current run finishes. Stopping a run discards anything queued for it.
+- Resend and Edit last controls, which stop the current run and either resubmit the previous prompt unchanged or put it back in the composer. Note that Pi keeps its own session history, so neither rewinds the model's context.
+- Pin notes to a session with Pin note. Pinned files are attached to every prompt in that session, shown as removable chips above the composer, and persist with the session. A pinned file that is deleted or unreadable is reported and skipped rather than failing the run.
+- A Stop button in the composer, shown only while a response is streaming. It replaces the duplicate Stop in the chat panel header, which has been removed. The Start/Stop control in the sidebar's top bar is unrelated and unchanged: that one starts and stops the pipeline, not the current reply.
+- Test suite (vitest) covering the security boundaries and pure logic: path containment, the Pi tool-mode decision, the safe-command allowlist and shell-metacharacter refusal, web-fetch host allowlisting and private/metadata IP blocking, `@`-mention resolution, and vault path normalisation.
+- ESLint with typescript-eslint and `eslint-plugin-obsidianmd`, wired into `npm run check` and CI alongside the tests.
+
+### Changed
+
+- Rebuild the top bar as Config, Chats, the model and profile picker, then Start/Kill. Config replaces the unlabelled hamburger, and Chats opens a scrollable list of every chat, newest first. The picker stretches to fill the space between.
+- Show only the five most recent chats on the home page, with a link to the rest in Chats, rather than filling the panel with the full history.
+- Colour the pipeline button green while it reads Start and red once it reads Kill, so its state is legible at a glance.
+- Base Start/Kill on whether the pipeline is actually usable rather than on the bridge alone. With `Start bridge automatically` on, the bridge is up before the user does anything, so the button previously offered Kill on a fresh load while the status indicator still read "bridge only". Both now read the same check.
+- Rework the sidebar's surfaces so it blends with the workspace: the panel now uses the note background rather than sitting as a grey slab, the chat is no longer a box nested inside a box of the same colour, and messages and cards carry the elevation instead. Colours come only from Obsidian's semantic variables, so themes and light/dark follow automatically.
+- Rename the sidebar's top-bar Stop to Kill, and colour it red while running. It tears down the whole local pipeline to free memory and battery, which is a different action from the composer's Stop; sharing a label made that easy to confuse.
+- Enter now sends the prompt and Shift+Enter inserts a newline. Ctrl/Cmd+Enter no longer has a separate meaning. When the `@`-mention list is open, Enter still accepts the highlighted suggestion.
+- Replace the composer's text buttons with colour-coded icons and hover tooltips: note, selection, vault, links, send, stop, and queue. Send and stop read as filled primary actions; the rest stay quiet until hovered. If an icon name is missing from your Obsidian build the button falls back to its text label rather than rendering blank.
+- Stream assistant replies by repainting only the message being written, instead of rebuilding the whole sidebar on every token. Long chats no longer slow down as they grow.
+- Replace the per-phase run chatter ("Pi turn started", "Model response started", "Pi is reasoning", and so on) with a single "Thinking..." line that clears once the reply arrives. Retries, extension errors, and failures are still shown.
+- Drop the per-session confirmation dialog and the "Experimental" labelling for Pi extensions, skills, prompt templates, and context files. The setting itself stays off by default, and its description now explains what enabling it gives up. The confirmation for a non-default Pi executable path is unchanged.
+- Report a tool Pi ran outside the requested mode as `Ran outside allowlist: ...` rather than "Blocked", and stop queueing an approval for it. Tool events arrive after Pi has already executed the call, so the previous wording implied a prevention the plugin cannot perform.
+- Apply Obsidian's sentence-case guidance to UI text: capitalise "Sidekick" as the product name in command names and setting descriptions, and lowercase prose that was title-cased ("Export chat", "between status and agent"). Four command names changed, so command-palette entries now read "Open Sidekick", "Insert Sidekick block", "Restart Sidekick bridge", and "Stop Sidekick bridge".
+- Move markdown rendering onto a Component owned by the view, and per-view UI state (open tool cards, menu and picker state) off module scope, so nothing leaks across plugin reloads or bleeds between leaves.
+- Signal run completion through an explicit `onComplete` callback carrying the reason, instead of inferring it from status message text.
+- Split `main.ts` into focused modules: `types`, `prompt/`, `session/`, `export/`, `util/`, `ui/modals/`, `agent/piResources`, and `bridge/pi/piFlags`, and move prompt-context assembly into `prompt/buildContext` behind an explicit dependency object built once per run.
+- Move the embedded block's minimum height from an inline style to a CSS custom property.
+
+### Security
+
+- Default `Pi tools` to **Read-only** (`read`, `grep`, `find`, `ls`) rather than `Disabled`, paired with Pi extensions staying off. Pi can now open and search vault files on its own initiative on a fresh install, which is the plugin's purpose; writes, deletes, shell access, and network access remain restricted. The pairing matters: the tool restriction covers Pi's built-in tools only, so read-only is meaningful only while extensions are disabled.
+- Reframe README and SECURITY.md around what the plugin actually does — it reads your vault by default — rather than presenting vault access as an opt-in extra. Both now state plainly that enabling Pi extensions allows unverified agent code to run outside every documented boundary, and that this is the user's choice and responsibility.
+- Rename the `piExperimentalFeaturesEnabled` setting to `allowPiUserConfig`, shown as `Allow Pi extensions and user configuration`. The old name described neither what it does nor why it matters. Existing values migrate automatically, so an explicit choice is preserved across the upgrade.
+- Correct the safety audit log, which recorded `--experimental-pi-features` — a flag never passed to Pi — whenever user configuration was enabled. Enabling it adds no flag; it removes four.
+- Document that Pi, not this plugin, enforces which tools a run may use, and that Pi is not confined to the vault by Local Sidekick. README and SECURITY.md now describe the boundary accurately.
+- Keep Pi extensions, skills, prompt templates, and context files **disabled by default**. Pi's `--tools`/`--no-tools` filter built-in tools only; extension-registered tools bypass them ([earendil-works/pi#2835](https://github.com/earendil-works/pi/issues/2835)), so passing `--no-extensions` is what makes the tool restriction meaningful.
+
+### Fixed
+
+- Group consecutive tool events into a single collapsed row summarising the steps, instead of one card per call.
+- Restore blue inline links for `@`-mentioned files in rendered messages. They were built with Obsidian's global element helpers, which target the global document rather than the node's own.
+- Keep the composer editable while a reply streams, so the next message can be written without waiting, and preserve the draft, focus, and caret position across the repaints a run triggers. Sending is still gated on the run finishing.
+- Only auto-scroll the event stream when it is already at the bottom, so scrolling back through a reply is no longer interrupted.
+- Stop rewriting the entire plugin data file while a reply is streaming; the final text is flushed when the run ends.
+- Decide whether a Pi run may use tools from the tool mode itself rather than by re-parsing the assembled command string. A prompt request that omits the tool mode is now denied instead of being read out of `--no-tools` text.
+- Build inline file links with Obsidian's element helpers instead of raw DOM calls.
+
 ## 0.2.3 - 2026-07-02
 
 - Merge remote-tracking branch 'origin/main' (92e25aa)

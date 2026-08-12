@@ -1,8 +1,18 @@
+import { MarkdownRenderChild } from "obsidian";
 import type { MarkdownPostProcessorContext } from "obsidian";
 
 import type AgentDashboardPlugin from "../main";
-import type { DashboardRenderOptions } from "../ui/renderDashboard";
-import { renderDashboardShell } from "../ui/renderDashboard";
+import type {
+  DashboardHost,
+  DashboardRenderOptions
+} from "../ui/renderDashboard";
+import {
+  createDashboardUiState,
+  renderDashboardShell
+} from "../ui/renderDashboard";
+
+/** Block options, minus the fields the host supplies. */
+type BlockOptions = Omit<DashboardRenderOptions, "embedded" | "host">;
 
 export function registerAgentDashboardBlock(
   plugin: AgentDashboardPlugin
@@ -10,12 +20,26 @@ export function registerAgentDashboardBlock(
   const renderBlock = (
     source: string,
     el: HTMLElement,
-    _ctx: MarkdownPostProcessorContext
+    ctx: MarkdownPostProcessorContext
   ) => {
     const options = parseBlockOptions(source);
+    // The embedded block is a static header with an "Open" button, so its
+    // host only needs to be able to repaint itself in place. The render child
+    // ties any markdown cleanup to the lifetime of the block.
+    const renderChild = new MarkdownRenderChild(el);
+    ctx.addChild(renderChild);
+    const host: DashboardHost = {
+      markdownComponent: renderChild,
+      rerender: () => {
+        renderDashboardShell(plugin, el, { ...options, embedded: true, host });
+      },
+      ui: createDashboardUiState()
+    };
+
     renderDashboardShell(plugin, el, {
       ...options,
-      embedded: true
+      embedded: true,
+      host
     });
   };
 
@@ -23,8 +47,8 @@ export function registerAgentDashboardBlock(
   plugin.registerMarkdownCodeBlockProcessor("agent-dashboard", renderBlock);
 }
 
-function parseBlockOptions(source: string): Omit<DashboardRenderOptions, "embedded"> {
-  const options: Omit<DashboardRenderOptions, "embedded"> = {};
+function parseBlockOptions(source: string): BlockOptions {
+  const options: BlockOptions = {};
 
   for (const rawLine of source.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -48,9 +72,7 @@ function parseBlockOptions(source: string): Omit<DashboardRenderOptions, "embedd
   return options;
 }
 
-function isBlockOptionKey(
-  key: string
-): key is keyof Omit<DashboardRenderOptions, "embedded"> {
+function isBlockOptionKey(key: string): key is keyof BlockOptions {
   return [
     "workspace",
     "mode",

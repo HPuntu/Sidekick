@@ -79,7 +79,8 @@ function normalizeCommandText(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
-function parseCommandTokens(
+/** Returns undefined for anything containing shell metacharacters. */
+export function parseCommandTokens(
   command: string
 ): { args: string[]; command: string } | undefined {
   if (/[;&|<>`$]/.test(command)) {

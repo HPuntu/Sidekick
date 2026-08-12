@@ -2,6 +2,9 @@ node_modules/
 dist/
 main.js
 .DS_Store
+# Obsidian writes this into the plugin folder. If you symlink this repo as the
+# plugin directory for development it lands here, and it holds your chat history.
+data.json
 *.log
 npm-debug.log*
 yarn-debug.log*

@@ -1,7 +1,11 @@
 import { ButtonComponent, Component, MarkdownRenderer, setIcon, TFile } from "obsidian";
 
 import type AgentDashboardPlugin from "../main";
-import type { AgentSessionHistoryItem, ProposedEditRecord } from "../main";
+import type {
+  AgentSessionHistoryItem,
+  PiToolMode,
+  ProposedEditRecord
+} from "../types";
 import type { AgentEvent, AgentToolEvent } from "../agent/AgentSession";
 import type { ProposedEditDiffLine } from "../agent/ProposedEdit";
 import type { BridgeSnapshot } from "../bridge/BridgeService";
@@ -11,26 +15,52 @@ import type { PiRpcDiscoverySnapshot } from "../bridge/pi/PiRpcDiscovery";
 import type { ApprovalRecord } from "../security/ApprovalQueue";
 import { summarizeAllowedRoots } from "../security/SafetyPolicy";
 
+/**
+ * Transient view state that must survive a full re-render. Lives on the host
+ * (one per dashboard instance) rather than at module scope, so it does not
+ * leak across plugin reloads or bleed between leaves.
+ */
+export interface DashboardUiState {
+  agentPickerOpen: boolean;
+  /** The Chats dropdown in the top bar. Mutually exclusive with menuOpen. */
+  chatsOpen: boolean;
+  expandedModelLabel: string | null;
+  menuOpen: boolean;
+  openToolEventIds: Set<string>;
+  /** Unsent composer text, restored after a rebuild. */
+  promptDraft: string;
+}
+
+export interface DashboardHost {
+  /**
+   * Owns the lifetime of MarkdownRenderer output. Replaced on each full
+   * render so the previous render's children are unloaded.
+   */
+  markdownComponent: Component;
+  /** Requests a coalesced full re-render of this dashboard. */
+  rerender(): void;
+  ui: DashboardUiState;
+}
+
 export interface DashboardRenderOptions {
   embedded: boolean;
+  host: DashboardHost;
   workspace?: string;
   mode?: string;
   layout?: string;
   session?: string;
   model?: string;
 }
-const openToolEventIds = new Set<string>();
-let menuOpen = false;
-let agentPickerOpen = false;
-let expandedModelLabel: string | null = null;
-let markdownComponent: Component | undefined;
 
-function getMarkdownRenderComponent(): Component {
-  if (!markdownComponent) {
-    markdownComponent = new Component();
-    markdownComponent.load();
-  }
-  return markdownComponent;
+export function createDashboardUiState(): DashboardUiState {
+  return {
+    agentPickerOpen: false,
+    chatsOpen: false,
+    expandedModelLabel: null,
+    menuOpen: false,
+    openToolEventIds: new Set<string>(),
+    promptDraft: ""
+  };
 }
 
 export function renderDashboardShell(
@@ -38,24 +68,296 @@ export function renderDashboardShell(
   containerEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
+  // A rebuild destroys the composer. Status events repaint mid-stream, so
+  // without this the caret jumps while the user is still typing.
+  const composerFocus = captureFocusedComposer(containerEl);
+
   containerEl.empty();
   containerEl.addClass("agent-dashboard");
   containerEl.toggleClass("agent-dashboard--embedded", options.embedded);
   containerEl.toggleClass("agent-dashboard--standalone", !options.embedded);
 
   if (options.embedded) {
-    containerEl.style.minHeight = `${plugin.settings.compactBlockHeight}px`;
+    containerEl.style.setProperty(
+      "--sidekick-compact-block-height",
+      `${plugin.settings.compactBlockHeight}px`
+    );
     renderEmbeddedShell(plugin, containerEl, options);
     return;
   }
 
   renderTopBar(plugin, containerEl, options);
-  if (menuOpen) {
+  if (options.host.ui.menuOpen) {
     renderMenuDropdown(plugin, containerEl, options);
+  }
+
+  if (options.host.ui.chatsOpen) {
+    renderChatsDropdown(plugin, containerEl, options);
   }
 
   const bodyEl = containerEl.createDiv({ cls: "agent-dashboard__body" });
   renderAgentPanel(plugin, bodyEl, options);
+  restoreFocusedComposer(containerEl, composerFocus);
+}
+
+interface IconButtonOptions {
+  /** Shown instead of the icon if this Obsidian build lacks that Lucide name. */
+  fallbackText: string;
+  icon: string;
+  onClick: () => void;
+  /** Drives the accent colour, via .agent-dashboard__icon-button--<variant>. */
+  variant: string;
+  disabled?: boolean;
+  tooltip: string;
+}
+
+/**
+ * Icon-only action button. Obsidian ships a fixed Lucide version, so an unknown
+ * icon name silently renders nothing; falling back to the label keeps the
+ * control usable rather than blank.
+ */
+function renderIconButton(
+  containerEl: HTMLElement,
+  options: IconButtonOptions
+): ButtonComponent {
+  const button = new ButtonComponent(containerEl)
+    .setTooltip(options.tooltip)
+    .setDisabled(options.disabled === true)
+    .onClick(options.onClick);
+
+  button.buttonEl.addClass("agent-dashboard__icon-button");
+  button.buttonEl.addClass(`agent-dashboard__icon-button--${options.variant}`);
+  button.buttonEl.setAttr("aria-label", options.tooltip);
+
+  setIcon(button.buttonEl, options.icon);
+  if (!button.buttonEl.querySelector("svg")) {
+    button.setButtonText(options.fallbackText);
+  }
+
+  return button;
+}
+
+/** Vault files attached to every prompt until unpinned. */
+function renderPinnedContext(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement
+): void {
+  if (plugin.pinnedContextPaths.length === 0) {
+    return;
+  }
+
+  const pinnedEl = containerEl.createDiv({ cls: "agent-dashboard__pinned" });
+  pinnedEl.createSpan({
+    cls: "agent-dashboard__pinned-label",
+    text: "Pinned:"
+  });
+
+  for (const pinnedPath of plugin.pinnedContextPaths) {
+    const chipEl = pinnedEl.createDiv({ cls: "agent-dashboard__pinned-chip" });
+    chipEl.createSpan({ text: pinnedPath });
+    const removeEl = chipEl.createSpan({
+      attr: {
+        "aria-label": `Unpin ${pinnedPath}`,
+        role: "button",
+        tabindex: "0"
+      },
+      cls: "agent-dashboard__pinned-remove"
+    });
+    setIcon(removeEl, "x");
+    removeEl.addEventListener("click", () => {
+      plugin.togglePinnedContextPath(pinnedPath);
+    });
+  }
+}
+
+function renderQueuedPrompt(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const queued = plugin.queuedPrompt;
+  if (!queued) {
+    return;
+  }
+
+  const queuedEl = containerEl.createDiv({ cls: "agent-dashboard__queued" });
+  const iconEl = queuedEl.createSpan({ cls: "agent-dashboard__queued-icon" });
+  setIcon(iconEl, "clock");
+  queuedEl.createSpan({
+    cls: "agent-dashboard__queued-text",
+    text: `Queued: ${truncateForDisplay(queued.prompt, 72)}`
+  });
+
+  new ButtonComponent(queuedEl)
+    .setButtonText("Cancel")
+    .setTooltip("Discard the queued prompt")
+    .onClick(() => {
+      plugin.cancelQueuedPrompt();
+      options.host.rerender();
+    });
+}
+
+/** Actions that only make sense once something has been sent. */
+function renderRunControls(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const canPin = plugin.app.workspace.getActiveFile() !== null;
+  if (!plugin.lastSubmittedPrompt && !canPin) {
+    return;
+  }
+
+  const controlsEl = containerEl.createDiv({
+    cls: "agent-dashboard__run-controls"
+  });
+
+  if (canPin) {
+    new ButtonComponent(controlsEl)
+      .setButtonText("Pin note")
+      .setTooltip("Attach the current note to every prompt in this session")
+      .onClick(() => {
+        plugin.pinActiveNote();
+      });
+  }
+
+  if (!plugin.lastSubmittedPrompt) {
+    return;
+  }
+
+  new ButtonComponent(controlsEl)
+    .setButtonText("Resend")
+    .setTooltip("Stop the current run and send the last prompt again")
+    .onClick(() => {
+      void plugin.resendLastPrompt();
+    });
+
+  new ButtonComponent(controlsEl)
+    .setButtonText("Edit last")
+    .setTooltip("Stop the current run and put the last prompt back in the composer")
+    .onClick(() => {
+      const last = plugin.takeLastPromptForEditing();
+      if (!last) {
+        return;
+      }
+
+      options.host.ui.promptDraft = last.prompt;
+      options.host.rerender();
+    });
+}
+
+function truncateForDisplay(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, maxLength - 1)}...`;
+}
+
+/**
+ * Caret only. The text itself comes from host.ui.promptDraft, which the input
+ * listener keeps current — carrying the value here too would let a stale
+ * textarea resurrect text that was just sent.
+ */
+interface ComposerFocusState {
+  end: number;
+  start: number;
+}
+
+/** Returns state only when the composer currently holds focus. */
+function captureFocusedComposer(
+  containerEl: HTMLElement
+): ComposerFocusState | undefined {
+  const active = containerEl.ownerDocument.activeElement;
+  if (
+    !(active instanceof HTMLTextAreaElement) ||
+    !active.hasClass("agent-dashboard__prompt-input") ||
+    !containerEl.contains(active)
+  ) {
+    return undefined;
+  }
+
+  return {
+    end: active.selectionEnd,
+    start: active.selectionStart
+  };
+}
+
+function restoreFocusedComposer(
+  containerEl: HTMLElement,
+  state: ComposerFocusState | undefined
+): void {
+  if (!state) {
+    return;
+  }
+
+  const promptEl = containerEl.querySelector(".agent-dashboard__prompt-input");
+  if (!(promptEl instanceof HTMLTextAreaElement)) {
+    return;
+  }
+
+  // The value was already set from the draft; clamp the caret in case the
+  // draft shrank (most obviously when the prompt was just sent).
+  const limit = promptEl.value.length;
+  promptEl.focus();
+  promptEl.setSelectionRange(
+    Math.min(state.start, limit),
+    Math.min(state.end, limit)
+  );
+}
+
+/** Class applied to each event wrapper so incremental updates can find it. */
+const EVENT_ID_ATTR = "data-sidekick-event-id";
+
+/** Chats shown on the home page. The rest are behind the Chats dropdown. */
+const RECENT_CHAT_LIMIT = 5;
+
+/**
+ * Re-renders only the text of a single streamed event. Returns false when the
+ * element is not on screen (e.g. a structural change is pending), in which
+ * case the caller should fall back to a full render.
+ */
+export function updateStreamedEventText(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions,
+  event: AgentEvent
+): boolean {
+  const eventEl = containerEl.querySelector(
+    `[${EVENT_ID_ATTR}="${CSS.escape(event.id)}"]`
+  );
+  if (!(eventEl instanceof HTMLElement)) {
+    return false;
+  }
+
+  const textEl = eventEl.querySelector(".agent-dashboard__event-text");
+  if (!(textEl instanceof HTMLElement)) {
+    return false;
+  }
+
+  const streamEl = eventEl.closest(".agent-dashboard__event-stream");
+  const pinned =
+    streamEl instanceof HTMLElement ? isScrolledToBottom(streamEl) : false;
+
+  textEl.empty();
+  void MarkdownRenderer.render(
+    plugin.app,
+    event.text,
+    textEl,
+    plugin.app.workspace.getActiveFile()?.path ?? "",
+    options.host.markdownComponent
+  ).then(() => {
+    linkInlineReferencedFiles(plugin, textEl);
+    if (pinned && streamEl instanceof HTMLElement) {
+      streamEl.scrollTop = streamEl.scrollHeight;
+    }
+  });
+
+  return true;
+}
+
+/** Within a few pixels of the bottom, so auto-scroll does not fight the user. */
+function isScrolledToBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
 }
 
 function renderEmbeddedShell(
@@ -92,41 +394,64 @@ function renderTopBar(
   const barEl = containerEl.createDiv({ cls: "agent-dashboard__topbar" });
   const rowEl = barEl.createDiv({ cls: "agent-dashboard__topbar-row" });
 
-  const menuButton = new ButtonComponent(rowEl)
-    .setIcon(menuOpen ? "x" : "menu")
-    .setTooltip(menuOpen ? "Hide status menu" : "Show status menu")
+  const configButton = new ButtonComponent(rowEl)
+    .setButtonText("Config")
+    .setTooltip(
+      options.host.ui.menuOpen
+        ? "Hide status and configuration"
+        : "Show status and configuration"
+    )
     .onClick(() => {
-      menuOpen = !menuOpen;
-      renderDashboardShell(plugin, containerEl, options);
+      options.host.ui.menuOpen = !options.host.ui.menuOpen;
+      // The two dropdowns share the space below the bar.
+      options.host.ui.chatsOpen = false;
+      options.host.rerender();
     });
-  menuButton.buttonEl.addClass("agent-dashboard__menu-toggle");
-  menuButton.buttonEl.toggleClass("is-active", menuOpen);
+  configButton.buttonEl.addClass("agent-dashboard__menu-toggle");
+  configButton.buttonEl.toggleClass("is-active", options.host.ui.menuOpen);
 
-  renderAgentPickerToggle(plugin, rowEl, containerEl, options);
+  const chatsButton = new ButtonComponent(rowEl)
+    .setButtonText("Chats")
+    .setTooltip("Browse every chat, newest first")
+    .onClick(() => {
+      options.host.ui.chatsOpen = !options.host.ui.chatsOpen;
+      options.host.ui.menuOpen = false;
+      options.host.rerender();
+    });
+  chatsButton.buttonEl.addClass("agent-dashboard__menu-toggle");
+  chatsButton.buttonEl.toggleClass("is-active", options.host.ui.chatsOpen);
 
-  const running = plugin.bridge.getSnapshot().status === "running";
+  renderAgentPickerToggle(plugin, rowEl, options);
+
+  // Kill only once the pipeline is actually usable. A bridge that auto-started
+  // on load is not something the user asked for, so it still offers Start.
+  const ready = isPipelineReady(plugin);
   const startButton = new ButtonComponent(
     rowEl.createDiv({ cls: "agent-dashboard__topbar-actions" })
   )
-    .setButtonText(running ? "Stop" : "Start")
+    // "Kill" rather than "Stop", so it is not mistaken for the composer's
+    // Stop, which ends the current reply. This tears down the whole pipeline.
+    .setButtonText(ready ? "Kill" : "Start")
     .setTooltip(
-      running
-        ? "Stop the local model pipeline (Stop, then Start to restart)"
+      ready
+        ? "Stop the bridge and unload the model from Ollama to free memory. Press Start to bring it back."
         : "Boot Ollama, Pi, the RPC bridge, and activate the model"
     )
     .setCta()
     .onClick(async () => {
-      if (running) {
-        await plugin.bridge.stop();
+      if (ready) {
+        await plugin.shutdownPipeline();
       } else {
         await plugin.startPipeline();
       }
-      renderDashboardShell(plugin, containerEl, options);
+      options.host.rerender();
     });
   startButton.buttonEl.addClass("agent-dashboard__start-button");
+  startButton.buttonEl.toggleClass("is-kill", ready);
+  startButton.buttonEl.toggleClass("is-start", !ready);
 
-  if (agentPickerOpen) {
-    renderAgentPickerPopover(plugin, barEl, containerEl, options);
+  if (options.host.ui.agentPickerOpen) {
+    renderAgentPickerPopover(plugin, barEl, options);
   }
 
   renderPipelineIndicator(plugin, barEl);
@@ -135,7 +460,6 @@ function renderTopBar(
 function renderAgentPickerToggle(
   plugin: AgentDashboardPlugin,
   rowEl: HTMLElement,
-  rootEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
   const profile = plugin.getSelectedSidekickProfile();
@@ -144,18 +468,18 @@ function renderAgentPickerToggle(
     cls: "agent-dashboard__agent-picker-toggle",
     type: "button"
   });
-  toggleEl.toggleClass("is-active", agentPickerOpen);
+  toggleEl.toggleClass("is-active", options.host.ui.agentPickerOpen);
   toggleEl.createSpan({
     cls: "agent-dashboard__agent-picker-label",
     text: `${profile ? profile.name : "No profile"} · ${modelLabel ? getShortModelLabel(modelLabel) : "no model"}`
   });
   setIcon(
     toggleEl.createSpan({ cls: "agent-dashboard__agent-picker-caret" }),
-    agentPickerOpen ? "chevron-up" : "chevron-down"
+    options.host.ui.agentPickerOpen ? "chevron-up" : "chevron-down"
   );
   toggleEl.addEventListener("click", () => {
-    agentPickerOpen = !agentPickerOpen;
-    renderDashboardShell(plugin, rootEl, options);
+    options.host.ui.agentPickerOpen = !options.host.ui.agentPickerOpen;
+    options.host.rerender();
   });
 }
 
@@ -189,7 +513,6 @@ function collectPickerModels(
 function renderAgentPickerPopover(
   plugin: AgentDashboardPlugin,
   barEl: HTMLElement,
-  rootEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
   const popoverEl = barEl.createDiv({
@@ -211,14 +534,14 @@ function renderAgentPickerPopover(
     .setTooltip("Reload Sidekick agent profiles")
     .onClick(async () => {
       await plugin.refreshSidekickProfiles(true);
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
   new ButtonComponent(controlsEl)
     .setButtonText("Create")
     .setTooltip("Create starter Sidekick agent and memory files")
     .onClick(async () => {
       await plugin.createSidekickStarterFiles();
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 
   const models = collectPickerModels(plugin);
@@ -239,7 +562,7 @@ function renderAgentPickerPopover(
 
   for (const model of models) {
     const isSelectedModel = model.label === modelLabel;
-    const isExpanded = expandedModelLabel === model.label;
+    const isExpanded = options.host.ui.expandedModelLabel === model.label;
     const modelEl = popoverEl.createDiv({
       cls: "agent-dashboard__agent-picker-model"
     });
@@ -260,9 +583,9 @@ function renderAgentPickerPopover(
       text: getShortModelLabel(model.label)
     });
     labelEl.addEventListener("click", () => {
-      agentPickerOpen = false;
+      options.host.ui.agentPickerOpen = false;
       void plugin.selectPiModel(model.label);
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 
     const caretEl = rowEl.createEl("button", {
@@ -275,8 +598,8 @@ function renderAgentPickerPopover(
       isExpanded ? "chevron-down" : "chevron-right"
     );
     caretEl.addEventListener("click", () => {
-      expandedModelLabel = isExpanded ? null : model.label;
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.ui.expandedModelLabel = isExpanded ? null : model.label;
+      options.host.rerender();
     });
 
     if (!isExpanded) {
@@ -287,12 +610,12 @@ function renderAgentPickerPopover(
       cls: "agent-dashboard__agent-picker-submenu"
     });
     const applyPair = (profilePath: string): void => {
-      agentPickerOpen = false;
+      options.host.ui.agentPickerOpen = false;
       void (async () => {
         await plugin.selectSidekickProfile(profilePath);
         await plugin.selectPiModel(model.label);
       })();
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     };
 
     const noneOptionEl = submenuEl.createEl("button", {
@@ -328,30 +651,41 @@ function renderAgentPickerPopover(
   }
 }
 
+/**
+ * The bridge starts on load when autoStartBridge is set, so "the bridge is up"
+ * is not the same as "the pipeline is usable". Both the Start/Kill button and
+ * the indicator read this, so they cannot disagree.
+ */
+function isPipelineReady(plugin: AgentDashboardPlugin): boolean {
+  return (
+    plugin.bridge.getSnapshot().status === "running" &&
+    plugin.piRpcDiscoverySnapshot.status === "ready"
+  );
+}
+
 function renderPipelineIndicator(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement
 ): void {
   const running = plugin.bridge.getSnapshot().status === "running";
-  const ready = plugin.piRpcDiscoverySnapshot.status === "ready";
+  const ready = isPipelineReady(plugin);
   const indicatorEl = containerEl.createDiv({
     cls: "agent-dashboard__topbar-title"
   });
   const dotEl = indicatorEl.createSpan({ cls: "agent-dashboard__pipeline-dot" });
-  dotEl.toggleClass("is-running", running && ready);
-  dotEl.toggleClass("is-partial", running !== ready);
+  dotEl.toggleClass("is-running", ready);
+  dotEl.toggleClass("is-partial", running && !ready);
 
   const model = getCurrentModelLabel(plugin);
   indicatorEl.createSpan({
     cls: "agent-dashboard__pipeline-label",
-    text:
-      running && ready
-        ? model
-          ? getShortModelLabel(model)
-          : "ready"
-        : running
-          ? "bridge only"
-          : "stopped"
+    text: ready
+      ? model
+        ? getShortModelLabel(model)
+        : "ready"
+      : running
+        ? "bridge only"
+        : "stopped"
   });
 }
 
@@ -375,10 +709,54 @@ function renderMenuDropdown(
     .setTooltip("Re-run the full start pipeline")
     .onClick(async () => {
       await plugin.startPipeline();
-      renderDashboardShell(plugin, containerEl, options);
+      options.host.rerender();
     });
   const listEl = statusSection.createDiv({ cls: "agent-dashboard__status-list" });
   renderStatusList(plugin, listEl, options);
+}
+
+/** Every chat, newest first. The home page shows only the most recent few. */
+function renderChatsDropdown(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions
+): void {
+  const menuEl = containerEl.createDiv({
+    cls: "agent-dashboard__menu agent-dashboard__menu--chats"
+  });
+
+  const headingEl = menuEl.createDiv({ cls: "agent-dashboard__menu-heading" });
+  headingEl.createEl("h4", { text: "All chats" });
+  const controlsEl = headingEl.createDiv({
+    cls: "agent-dashboard__panel-controls"
+  });
+  new ButtonComponent(controlsEl)
+    .setButtonText("New")
+    .setTooltip("Open an empty new chat")
+    .setDisabled(plugin.agentSessionStatus === "running")
+    .onClick(() => {
+      options.host.ui.chatsOpen = false;
+      void plugin.startNewAgentSession();
+      options.host.rerender();
+    });
+
+  const sessions = plugin.getAgentSessionHistory();
+  if (sessions.length === 0) {
+    menuEl.createEl("p", {
+      cls: "agent-dashboard__empty",
+      text: "No chats yet."
+    });
+    return;
+  }
+
+  const listEl = menuEl.createDiv({
+    cls: "agent-dashboard__session-list agent-dashboard__session-list--scroll"
+  });
+  for (const session of sessions) {
+    renderSessionHistoryItem(plugin, listEl, options, session, () => {
+      options.host.ui.chatsOpen = false;
+    });
+  }
 }
 
 function renderStatusList(
@@ -532,11 +910,11 @@ function renderSafetyStatusItems(
 ): void {
   const snapshot = plugin.getSafetySnapshot();
   renderStatusItem(containerEl, "Safety", snapshot.mode);
-  renderStatusItem(containerEl, "Pi tools", describePiToolMode(plugin.settings.piToolMode));
+  renderStatusItem(containerEl, "Pi tools", formatPiToolModeLabel(plugin.settings.piToolMode));
   renderStatusItem(
     containerEl,
     "Pi extras",
-    plugin.settings.piExperimentalFeaturesEnabled ? "experimental" : "disabled"
+    plugin.settings.allowPiUserConfig ? "enabled" : "disabled"
   );
   renderStatusItem(
     containerEl,
@@ -560,7 +938,8 @@ function renderSafetyStatusItems(
   }
 }
 
-function describePiToolMode(toolMode: "disabled" | "read-only"): string {
+/** Short form for the status list. See describePiToolMode for the prose form. */
+function formatPiToolModeLabel(toolMode: PiToolMode): string {
   if (toolMode === "read-only") {
     return "read, grep, find, ls";
   }
@@ -576,10 +955,9 @@ function renderAgentPanel(
   const panelEl = containerEl.createDiv({
     cls: "agent-dashboard__panel agent-dashboard__panel--agent"
   });
-  const rootEl = containerEl.parentElement ?? containerEl;
 
   if (plugin.agentViewMode === "history") {
-    renderAgentHistoryPage(plugin, panelEl, rootEl, options);
+    renderAgentHistoryPage(plugin, panelEl, options);
     return;
   }
 
@@ -601,22 +979,13 @@ function renderAgentPanel(
     cls: "agent-dashboard__panel-controls"
   });
 
-  if (plugin.agentSessionStatus === "running") {
-    new ButtonComponent(controlsEl)
-      .setButtonText("Stop")
-      .setTooltip("Stop current agent run")
-      .onClick(() => {
-        plugin.stopAgentRun();
-        renderDashboardShell(plugin, rootEl, options);
-      });
-  }
-
+  // Stopping a run lives on the composer, next to where the reply is arriving.
   new ButtonComponent(controlsEl)
     .setButtonText("Clear")
     .setTooltip("Clear agent event stream")
     .onClick(() => {
       plugin.clearAgentEvents();
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 
   new ButtonComponent(controlsEl)
@@ -625,7 +994,7 @@ function renderAgentPanel(
     .setDisabled(plugin.agentSessionStatus === "running")
     .onClick(() => {
       void plugin.startNewAgentSession();
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 
   new ButtonComponent(controlsEl)
@@ -638,7 +1007,7 @@ function renderAgentPanel(
       plugin.openChatExportModal();
     });
 
-  renderApprovalQueue(plugin, panelEl, rootEl, options);
+  renderApprovalQueue(plugin, panelEl, options);
 
   const streamEl = panelEl.createDiv({ cls: "agent-dashboard__event-stream" });
   if (plugin.agentEvents.length === 0) {
@@ -647,21 +1016,38 @@ function renderAgentPanel(
       text: "No agent events yet."
     });
   } else {
-    for (const event of plugin.agentEvents) {
-      renderAgentEvent(plugin, streamEl, event);
+    // Consecutive tool events collapse into one summary row, so a run that
+    // reads a dozen files does not bury the reply under a dozen cards.
+    for (const group of groupConsecutiveToolEvents(plugin.agentEvents)) {
+      if (group.length === 1 && group[0].kind !== "tool") {
+        renderAgentEvent(plugin, streamEl, options, group[0]);
+        continue;
+      }
+
+      renderToolEventGroup(plugin, streamEl, options, group);
     }
     streamEl.scrollTop = streamEl.scrollHeight;
   }
 
   const composerEl = panelEl.createDiv({ cls: "agent-dashboard__composer" });
+  renderPinnedContext(plugin, composerEl);
+  renderQueuedPrompt(plugin, composerEl, options);
+  renderRunControls(plugin, composerEl, options);
+
   const promptEl = composerEl.createEl("textarea", {
     cls: "agent-dashboard__prompt-input",
     attr: {
-      placeholder: "Ask the agent... Try /agent research-tutor on the first line",
+      placeholder: "Ask the agent...  Enter to send, Shift+Enter for a new line",
       rows: "3"
     }
   });
-  promptEl.disabled = plugin.agentSessionStatus === "running";
+  // A rebuild destroys the textarea, so an unsent draft is kept on the host.
+  promptEl.value = options.host.ui.promptDraft;
+  promptEl.addEventListener("input", () => {
+    options.host.ui.promptDraft = promptEl.value;
+  });
+  // Deliberately still editable while a reply streams, so the next message can
+  // be written without waiting. Only sending is gated on the run finishing.
   const suggestionsEl = composerEl.createDiv({
     cls: "agent-dashboard__mention-suggestions"
   });
@@ -670,7 +1056,13 @@ function renderAgentPanel(
   let selectedMentionIndex = 0;
 
   promptEl.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    // Enter sends; Shift+Enter is a newline. When the mention list is open
+    // Enter belongs to it, so that case is handled further down.
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !suggestionsEl.hasClass("is-visible")
+    ) {
       event.preventDefault();
       void sendPrompt("none");
       closeMentionSuggestions();
@@ -716,49 +1108,72 @@ function renderAgentPanel(
     updateMentionSuggestions();
   });
 
+  const running = plugin.agentSessionStatus === "running";
   const composerActionsEl = composerEl.createDiv({
     cls: "agent-dashboard__composer-actions"
   });
-  new ButtonComponent(composerActionsEl)
-    .setButtonText(plugin.agentSessionStatus === "running" ? "Running" : "Send")
-    .setTooltip("Send prompt")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(() => {
-      void sendPrompt("none");
-    });
 
-  new ButtonComponent(composerActionsEl)
-    .setButtonText("Note")
-    .setTooltip("Send prompt with current note context")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(() => {
-      void sendPrompt("note");
-    });
+  renderIconButton(composerActionsEl, {
+    fallbackText: "Note",
+    icon: "file-text",
+    tooltip: "Send with the current note as context",
+    variant: "note",
+    onClick: () => void sendPrompt("note")
+  });
 
-  new ButtonComponent(composerActionsEl)
-    .setButtonText("Selection")
-    .setTooltip("Send prompt with selected text context")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(() => {
-      void sendPrompt("selection");
-    });
+  renderIconButton(composerActionsEl, {
+    fallbackText: "Selection",
+    icon: "mouse-pointer",
+    tooltip: "Send with the current editor selection as context",
+    variant: "selection",
+    onClick: () => void sendPrompt("selection")
+  });
 
-  new ButtonComponent(composerActionsEl)
-    .setButtonText("Vault")
-    .setTooltip("Send prompt with vault search and related-note context")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(() => {
-      void sendPrompt("vault");
-    });
+  renderIconButton(composerActionsEl, {
+    fallbackText: "Vault",
+    icon: "vault",
+    tooltip: "Send with vault search and related-note context",
+    variant: "vault",
+    onClick: () => void sendPrompt("vault")
+  });
 
-  new ButtonComponent(composerActionsEl)
-    .setButtonText("Links")
-    .setTooltip("Suggest conservative internal links for the current note")
-    .setDisabled(plugin.agentSessionStatus === "running")
-    .onClick(() => {
+  renderIconButton(composerActionsEl, {
+    disabled: running,
+    fallbackText: "Links",
+    icon: "link-2",
+    tooltip: "Suggest conservative internal links for the current note",
+    variant: "links",
+    onClick: () => {
       void plugin.suggestInternalLinksForActiveNote();
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
+    }
+  });
+
+  composerActionsEl.createDiv({ cls: "agent-dashboard__composer-spacer" });
+
+  if (running) {
+    renderIconButton(composerActionsEl, {
+      fallbackText: "Stop",
+      icon: "square",
+      tooltip: "Stop the current response",
+      variant: "stop",
+      onClick: () => {
+        plugin.stopAgentRun();
+        options.host.rerender();
+      }
     });
+  }
+
+  // Sends normally; queues instead when a run is already in flight.
+  renderIconButton(composerActionsEl, {
+    fallbackText: running ? "Queue" : "Send",
+    icon: running ? "clock" : "corner-down-left",
+    tooltip: running
+      ? "Queue this prompt for when the current run finishes"
+      : "Send prompt (Enter)",
+    variant: running ? "queue" : "send",
+    onClick: () => void sendPrompt("none")
+  });
 
   async function sendPrompt(
     contextMode: "none" | "note" | "selection" | "vault"
@@ -769,8 +1184,9 @@ function renderAgentPanel(
     }
 
     promptEl.value = "";
+    options.host.ui.promptDraft = "";
     closeMentionSuggestions();
-    renderDashboardShell(plugin, rootEl, options);
+    options.host.rerender();
   }
 
   function updateMentionSuggestions(): void {
@@ -837,6 +1253,7 @@ function renderAgentPanel(
       ? `@[[${suggestion.replace(/\.md$/i, "")}]]${trailingSpace}`
       : `@${suggestion}${trailingSpace}`;
     promptEl.value = `${value.slice(0, mention.start)}${insertion}${suffix}`;
+    options.host.ui.promptDraft = promptEl.value;
     const cursor = mention.start + insertion.length;
     promptEl.setSelectionRange(cursor, cursor);
     promptEl.focus();
@@ -847,7 +1264,6 @@ function renderAgentPanel(
 function renderAgentHistoryPage(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
-  rootEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
   const pageEl = containerEl.createDiv({
@@ -860,9 +1276,14 @@ function renderAgentHistoryPage(
   const promptEl = composerEl.createEl("textarea", {
     cls: "agent-dashboard__prompt-input",
     attr: {
-      placeholder: "Start a new chat... Try /agent research-tutor on the first line",
+      placeholder: "Start a new chat...  Enter to send, Shift+Enter for a new line",
       rows: "3"
     }
+  });
+  // A rebuild destroys the textarea, so an unsent draft is kept on the host.
+  promptEl.value = options.host.ui.promptDraft;
+  promptEl.addEventListener("input", () => {
+    options.host.ui.promptDraft = promptEl.value;
   });
   const suggestionsEl = composerEl.createDiv({
     cls: "agent-dashboard__mention-suggestions"
@@ -875,33 +1296,46 @@ function renderAgentHistoryPage(
     cls: "agent-dashboard__composer-actions"
   });
 
-  new ButtonComponent(actionsEl)
-    .setButtonText("Send")
-    .setTooltip("Start a new chat")
-    .onClick(() => {
-      void startSession("none");
-    });
-  new ButtonComponent(actionsEl)
-    .setButtonText("Note")
-    .setTooltip("Start a new chat with current note context")
-    .onClick(() => {
-      void startSession("note");
-    });
-  new ButtonComponent(actionsEl)
-    .setButtonText("Selection")
-    .setTooltip("Start a new chat with selected text context")
-    .onClick(() => {
-      void startSession("selection");
-    });
-  new ButtonComponent(actionsEl)
-    .setButtonText("Vault")
-    .setTooltip("Start a new chat with vault search and related-note context")
-    .onClick(() => {
-      void startSession("vault");
-    });
+  renderIconButton(actionsEl, {
+    fallbackText: "Note",
+    icon: "file-text",
+    tooltip: "Start a new chat with the current note as context",
+    variant: "note",
+    onClick: () => void startSession("note")
+  });
+
+  renderIconButton(actionsEl, {
+    fallbackText: "Selection",
+    icon: "mouse-pointer",
+    tooltip: "Start a new chat with the current editor selection as context",
+    variant: "selection",
+    onClick: () => void startSession("selection")
+  });
+
+  renderIconButton(actionsEl, {
+    fallbackText: "Vault",
+    icon: "vault",
+    tooltip: "Start a new chat with vault search and related-note context",
+    variant: "vault",
+    onClick: () => void startSession("vault")
+  });
+
+  actionsEl.createDiv({ cls: "agent-dashboard__composer-spacer" });
+
+  renderIconButton(actionsEl, {
+    fallbackText: "Send",
+    icon: "corner-down-left",
+    tooltip: "Start a new chat (Enter)",
+    variant: "send",
+    onClick: () => void startSession("none")
+  });
 
   promptEl.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !suggestionsEl.hasClass("is-visible")
+    ) {
       event.preventDefault();
       void startSession("none");
       closeMentionSuggestions();
@@ -959,7 +1393,7 @@ function renderAgentHistoryPage(
     .setTooltip("Open an empty new chat")
     .onClick(() => {
       void plugin.startNewAgentSession();
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 
   const sessions = plugin.getAgentSessionHistory();
@@ -972,8 +1406,23 @@ function renderAgentHistoryPage(
     const listEl = historyEl.createDiv({
       cls: "agent-dashboard__session-list"
     });
-    for (const session of sessions) {
-      renderSessionHistoryItem(plugin, listEl, rootEl, options, session);
+    // Only the most recent few; the rest live behind Chats in the top bar.
+    for (const session of sessions.slice(0, RECENT_CHAT_LIMIT)) {
+      renderSessionHistoryItem(plugin, listEl, options, session);
+    }
+
+    const hiddenCount = sessions.length - RECENT_CHAT_LIMIT;
+    if (hiddenCount > 0) {
+      const moreEl = historyEl.createEl("button", {
+        cls: "agent-dashboard__session-more",
+        text: `${hiddenCount} more in Chats`,
+        type: "button"
+      });
+      moreEl.addEventListener("click", () => {
+        options.host.ui.chatsOpen = true;
+        options.host.ui.menuOpen = false;
+        options.host.rerender();
+      });
     }
   }
 
@@ -989,9 +1438,10 @@ function renderAgentHistoryPage(
     const accepted = await plugin.sendAgentPrompt(prompt, contextMode);
     if (accepted) {
       promptEl.value = "";
+      options.host.ui.promptDraft = "";
       closeMentionSuggestions();
     }
-    renderDashboardShell(plugin, rootEl, options);
+    options.host.rerender();
   }
 
   function updateMentionSuggestions(): void {
@@ -1058,6 +1508,7 @@ function renderAgentHistoryPage(
       ? `@[[${suggestion.replace(/\.md$/i, "")}]]${trailingSpace}`
       : `@${suggestion}${trailingSpace}`;
     promptEl.value = `${value.slice(0, mention.start)}${insertion}${suffix}`;
+    options.host.ui.promptDraft = promptEl.value;
     const cursor = mention.start + insertion.length;
     promptEl.setSelectionRange(cursor, cursor);
     promptEl.focus();
@@ -1068,9 +1519,10 @@ function renderAgentHistoryPage(
 function renderSessionHistoryItem(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
-  rootEl: HTMLElement,
   options: DashboardRenderOptions,
-  session: AgentSessionHistoryItem
+  session: AgentSessionHistoryItem,
+  /** Lets the dropdown close itself before the chat opens. */
+  beforeOpen?: () => void
 ): void {
   const itemEl = containerEl.createDiv({
     attr: {
@@ -1089,8 +1541,9 @@ function renderSessionHistoryItem(
   });
 
   const openSession = (): void => {
+    beforeOpen?.();
     void plugin.openAgentSession(session.name);
-    renderDashboardShell(plugin, rootEl, options);
+    options.host.rerender();
   };
 
   itemEl.addEventListener("click", openSession);
@@ -1217,7 +1670,6 @@ function getModelLogoText(modelLabel: string): string {
 function renderApprovalQueue(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
-  rootEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
   const pendingRecords = plugin.getPendingApprovalRecords();
@@ -1238,14 +1690,13 @@ function renderApprovalQueue(
   });
 
   for (const record of pendingRecords) {
-    renderApprovalRecord(plugin, queueEl, rootEl, options, record);
+    renderApprovalRecord(plugin, queueEl, options, record);
   }
 }
 
 function renderApprovalRecord(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
-  rootEl: HTMLElement,
   options: DashboardRenderOptions,
   record: ApprovalRecord
 ): void {
@@ -1283,7 +1734,7 @@ function renderApprovalRecord(
     .setTooltip("Record approval without executing")
     .onClick(() => {
       plugin.approveRequest(record.id);
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 
   new ButtonComponent(actionsEl)
@@ -1291,7 +1742,7 @@ function renderApprovalRecord(
     .setTooltip("Deny request")
     .onClick(() => {
       plugin.denyRequest(record.id);
-      renderDashboardShell(plugin, rootEl, options);
+      options.host.rerender();
     });
 }
 
@@ -1316,6 +1767,7 @@ function getApprovalDetail(record: ApprovalRecord): string {
 function renderAgentEvent(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
+  options: DashboardRenderOptions,
   event: AgentEvent
 ): void {
   if (event.kind === "status") {
@@ -1324,11 +1776,12 @@ function renderAgentEvent(
   }
 
   if (event.kind === "tool") {
-    renderToolEvent(plugin, containerEl, event);
+    renderToolEvent(plugin, containerEl, options, event);
     return;
   }
 
   const eventEl = containerEl.createDiv({
+    attr: { [EVENT_ID_ATTR]: event.id },
     cls: `agent-dashboard__event agent-dashboard__event--${event.kind}`
   });
   const metaEl = eventEl.createDiv({ cls: "agent-dashboard__event-meta" });
@@ -1350,7 +1803,7 @@ function renderAgentEvent(
     event.text,
     textEl,
     plugin.app.workspace.getActiveFile()?.path ?? "",
-    getMarkdownRenderComponent()
+    options.host.markdownComponent
   ).then(() => {
     linkInlineReferencedFiles(plugin, textEl);
   });
@@ -1358,9 +1811,108 @@ function renderAgentEvent(
   renderProposedEdits(plugin, eventEl, event.id);
 }
 
+/** Runs of adjacent tool events; every other event is its own group of one. */
+function groupConsecutiveToolEvents(events: AgentEvent[]): AgentEvent[][] {
+  const groups: AgentEvent[][] = [];
+
+  for (const event of events) {
+    const lastGroup = groups[groups.length - 1];
+    if (event.kind === "tool" && lastGroup?.[0]?.kind === "tool") {
+      lastGroup.push(event);
+      continue;
+    }
+
+    groups.push([event]);
+  }
+
+  return groups;
+}
+
+/** One collapsed row for a run of tool events, expanding to the full list. */
+function renderToolEventGroup(
+  plugin: AgentDashboardPlugin,
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions,
+  events: AgentEvent[]
+): void {
+  const groupId = `tool-group-${events[0].id}`;
+  const isOpen = options.host.ui.openToolEventIds.has(groupId);
+  const hasWarning = events.some((event) => event.tool?.status === "blocked");
+
+  const groupEl = containerEl.createDiv({ cls: "agent-dashboard__tool-group" });
+  groupEl.toggleClass("is-open", isOpen);
+  groupEl.toggleClass("has-warning", hasWarning);
+
+  const headerEl = groupEl.createDiv({
+    attr: {
+      "aria-expanded": String(isOpen),
+      role: "button",
+      tabindex: "0"
+    },
+    cls: "agent-dashboard__tool-group-header"
+  });
+
+  headerEl.createSpan({
+    cls: "agent-dashboard__tool-group-disclosure",
+    text: isOpen ? "▾" : "▸"
+  });
+  const iconEl = headerEl.createSpan({ cls: "agent-dashboard__tool-group-icon" });
+  setIcon(iconEl, hasWarning ? "alert-triangle" : "wrench");
+  headerEl.createSpan({
+    cls: "agent-dashboard__tool-group-label",
+    text: summarizeToolGroup(events)
+  });
+
+  const toggle = (): void => {
+    if (options.host.ui.openToolEventIds.has(groupId)) {
+      options.host.ui.openToolEventIds.delete(groupId);
+    } else {
+      options.host.ui.openToolEventIds.add(groupId);
+    }
+
+    options.host.rerender();
+  };
+
+  headerEl.addEventListener("click", toggle);
+  headerEl.addEventListener("keydown", (keyboardEvent) => {
+    if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") {
+      return;
+    }
+
+    keyboardEvent.preventDefault();
+    toggle();
+  });
+
+  if (!isOpen) {
+    return;
+  }
+
+  const bodyEl = groupEl.createDiv({ cls: "agent-dashboard__tool-group-body" });
+  for (const event of events) {
+    renderToolEvent(plugin, bodyEl, options, event);
+  }
+}
+
+function summarizeToolGroup(events: AgentEvent[]): string {
+  const names = new Set(
+    events.map((event) => event.tool?.name).filter((name): name is string => !!name)
+  );
+  const count = events.length;
+  const noun = count === 1 ? "step" : "steps";
+
+  if (names.size === 0) {
+    return `${count} context ${noun}`;
+  }
+
+  const shown = [...names].slice(0, 3).join(", ");
+  const extra = names.size - Math.min(names.size, 3);
+  return `${count} ${noun} · ${shown}${extra > 0 ? ` +${extra}` : ""}`;
+}
+
 function renderToolEvent(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement,
+  options: DashboardRenderOptions,
   event: AgentEvent
 ): void {
   const tool = event.tool ?? inferToolEvent(event.text);
@@ -1418,12 +1970,12 @@ function renderToolEvent(
     disclosureEl.setText(nextOpen ? "▾" : "▸");
     headerEl.setAttr("aria-expanded", String(nextOpen));
     if (nextOpen) {
-      openToolEventIds.add(event.id);
+      options.host.ui.openToolEventIds.add(event.id);
     } else {
-      openToolEventIds.delete(event.id);
+      options.host.ui.openToolEventIds.delete(event.id);
     }
   };
-  setOpen(openToolEventIds.has(event.id));
+  setOpen(options.host.ui.openToolEventIds.has(event.id));
   const toggleOpen = () => setOpen(!cardEl.hasClass("is-open"));
   cardEl.addEventListener("click", (mouseEvent) => {
     const target = mouseEvent.target;
@@ -1472,7 +2024,7 @@ function renderToolEvent(
       event.text,
       textEl,
       plugin.app.workspace.getActiveFile()?.path ?? "",
-      getMarkdownRenderComponent()
+      options.host.markdownComponent
     ).then(() => {
       linkInlineReferencedFiles(plugin, textEl);
     });
@@ -1836,6 +2388,9 @@ function replaceInlineFileReferences(
   candidates: { file: TFile; text: string }[]
 ): void {
   const text = textNode.textContent ?? "";
+  // Deliberately the plain DOM API rather than Obsidian's createFragment /
+  // createEl helpers: the linter prefers those, but they build against the
+  // global document, and this must stay in the text node's own document.
   const fragment = textNode.ownerDocument.createDocumentFragment();
   let offset = 0;
   let changed = false;

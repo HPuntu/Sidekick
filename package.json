@@ -5,12 +5,17 @@
   "main": "main.js",
   "scripts": {
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "check": "npm run typecheck && npm run lint && npm run test",
     "dev": "node esbuild.config.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "package": "node scripts/package-release.mjs",
-    "release:check": "npm run typecheck && npm run sync:version && npm run build && npm audit --omit=dev",
+    "release:check": "npm run check && npm run sync:version && npm run build && npm audit --omit=dev",
     "release:verify-tag": "node scripts/verify-release-tag.mjs",
     "release:zip": "npm run release:check && npm run package",
     "sync:version": "node scripts/sync-version.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc -noEmit -skipLibCheck"
   },
   "keywords": [
@@ -29,10 +34,15 @@
     "styles.css"
   ],
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.11.30",
     "esbuild": "^0.28.0",
+    "eslint": "^10.8.1",
+    "eslint-plugin-obsidianmd": "^0.4.1",
     "obsidian": "^1.5.12",
     "tslib": "^2.6.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^3.2.7"
   }
 }

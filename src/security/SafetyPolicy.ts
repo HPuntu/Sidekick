@@ -1,5 +1,7 @@
 import path from "path";
 
+import type { PiToolMode } from "../types";
+
 export type SafetyActionKind =
   | "approved-write"
   | "delete"
@@ -17,6 +19,12 @@ export interface SafetyRequest {
   command?: string;
   description?: string;
   targetPath?: string;
+  /**
+   * Required for `kind: "prompt"`. This is the value that decides the `--tools`
+   * argument, so the policy checks it directly rather than re-parsing a command
+   * string the caller assembled.
+   */
+  toolMode?: PiToolMode;
 }
 
 export interface SafetyDecision {
@@ -47,8 +55,7 @@ export function assessSafetyRequest(
   }
 
   if (request.kind === "prompt") {
-    const command = request.command ?? "";
-    if (usesNoTools(command)) {
+    if (request.toolMode === "disabled") {
       return {
         allowed: true,
         reason: "Prompt run has Pi tools disabled.",
@@ -57,7 +64,7 @@ export function assessSafetyRequest(
       };
     }
 
-    if (usesOnlyReadOnlyPiTools(command)) {
+    if (request.toolMode === "read-only") {
       return {
         allowed: true,
         reason: "Prompt run only enables Pi read-only tools.",
@@ -131,6 +138,15 @@ export function assessSafetyRequest(
   };
 }
 
+export function describeSafetyRequest(request: SafetyRequest): string {
+  return (
+    request.description ??
+    request.command ??
+    request.targetPath ??
+    request.kind
+  );
+}
+
 export function parseExternalRoots(value: string): string[] {
   return value
     .split(/\r?\n/)
@@ -172,33 +188,7 @@ function deny(
   };
 }
 
-function usesNoTools(command: string): boolean {
-  const paddedCommand = ` ${command} `;
-  return (
-    /\s(--no-tools|-nt)(\s|$)/.test(paddedCommand) &&
-    !/\s(--tools|-t)\s+/.test(paddedCommand)
-  );
-}
-
-function usesOnlyReadOnlyPiTools(command: string): boolean {
-  const matches = [...` ${command} `.matchAll(/\s(?:--tools|-t)\s+([^\s]+)/g)];
-  if (matches.length !== 1) {
-    return false;
-  }
-
-  const allowedTools = new Set(["find", "grep", "ls", "read"]);
-  const requestedTools = matches[0][1]
-    .split(",")
-    .map((tool) => tool.trim())
-    .filter(Boolean);
-
-  return (
-    requestedTools.length > 0 &&
-    requestedTools.every((tool) => allowedTools.has(tool))
-  );
-}
-
-function isPathInsideAnyRoot(targetPath: string, roots: string[]): boolean {
+export function isPathInsideAnyRoot(targetPath: string, roots: string[]): boolean {
   const resolvedTarget = path.resolve(targetPath);
 
   return roots.some((root) => {

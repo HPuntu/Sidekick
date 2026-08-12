@@ -1,6 +1,10 @@
 # Security
 
-Local Sidekick is a local-first Obsidian plugin for working with Pi, Ollama, and vault files. It is alpha software. Treat it as a powerful local automation surface and test it in a copied vault before using it on important notes.
+Local Sidekick runs a local AI agent against your Obsidian vault. It is alpha software. Test it in a copied vault before using it on notes you care about.
+
+**By design, the agent reads your vault.** The default configuration launches Pi with read-only tools (`read`, `grep`, `find`, `ls`) rooted at the vault, so the model can open and search your notes on its own initiative. That is the plugin's purpose, not an optional extra. Writing, deleting, shell execution, and network access are separately restricted, as described below.
+
+**One setting disables those restrictions.** `Allow Pi extensions and user configuration` is off by default. Enabling it allows unverified agent code to run through Pi, outside every boundary this document describes. Users may reasonably want that; the consequences are theirs.
 
 ## Supported Versions
 
@@ -10,7 +14,7 @@ Local Sidekick is a local-first Obsidian plugin for working with Pi, Ollama, and
 
 ## Local Data
 
-The plugin can read files from the active Obsidian vault when you mention them with `@`, use vault context helpers, or select a Sidekick `.agent.md` profile with included prompt or memory files. Optional external workspace roots are read-only and must be configured explicitly.
+With the default read-only tool mode, Pi can open and search any file in the vault on its own initiative. The plugin additionally reads files you mention with `@`, vault context helpers, pinned notes, and Sidekick `.agent.md` profiles with their included prompt or memory files. Optional external workspace roots are read-only and must be configured explicitly.
 
 The plugin does not intentionally send data to hosted AI providers. Model prompts are sent to the configured local Pi and Ollama processes. If you enable web fetch, requested HTTPS URLs from explicitly allowlisted hosts are fetched directly by the plugin and included as prompt context.
 
@@ -20,16 +24,16 @@ Settings, chat history, proposed edits, approvals, and session metadata are stor
 
 Sidekick profiles are Markdown files in the vault, usually under `Sidekick/Agents/*.agent.md`, with optional includes under `Sidekick/Prompts/` and `Sidekick/Memory/`. Treat them like local configuration: they can add prompt instructions, select preferred local models, include note excerpts or summaries, and request either disabled or read-only Pi tool mode.
 
-Profiles cannot enable Pi bash, edit, or write tools through Local Sidekick. They can still influence a local model's behavior, so inspect profile and memory files before using a vault from someone else.
+Profiles cannot request Pi bash, edit, or write tools through Local Sidekick; they may only ask for disabled or read-only mode. They can still influence a local model's behavior, so inspect profile and memory files before using a vault from someone else.
 
 The explicit `Export Sidekick Pi resources` command writes `.pi/prompts`, `.pi/skills`, and merges entries into `.pi/settings.json`. This can affect Pi runs started directly from the vault root, so inspect generated `.pi/` files before using them with Pi outside Local Sidekick.
 
 ## Tool Boundaries
 
-Default behavior is conservative:
+What the shipped defaults allow and refuse:
 
-- Pi tools are disabled by default.
-- Read-only Pi mode enables only `read`, `grep`, `find`, and `ls`.
+- Pi reads the vault: tools default to read-only `read`, `grep`, `find`, and `ls`.
+- Pi extensions, skills, prompt templates, and context files are disabled, which is what makes that restriction hold.
 - Pi `bash`, edit, and write tools are disabled by the plugin.
 - The plugin does launch local processes for Pi integration. This is required for local agent execution, model discovery, model switching, and prompt streaming.
 - Pi and safe commands are launched without a shell, so shell expansion, pipes, redirects, and command chaining are not available through these paths.
@@ -42,17 +46,47 @@ Default behavior is conservative:
 - URL fetching requires HTTPS and an explicit host allowlist.
 - URL fetching resolves DNS and blocks localhost, private, link-local, reserved, multicast, and metadata-style addresses.
 
-## Experimental Pi Features
+## Who Enforces Tool Restrictions
 
-Prompt runs pass flags that disable Pi extensions, skills, prompt templates, and context files by default. This keeps Local Sidekick's context path narrow and easier to audit.
+**Pi does, not this plugin.** Local Sidekick restricts tools by passing arguments when it launches Pi:
 
-The `Experimental` settings section can allow Pi to load those features by removing the disabling flags. Enable this only if you trust your Pi configuration and understand that extensions, skills, prompt templates, or context files may add behavior and context outside Local Sidekick's tested safety path.
+- `--tools read,grep,find,ls` for the default `Read-only` mode
+- `--no-tools` for `Disabled` mode
 
-Pi tools are also disabled by default. The only exposed Pi tool mode is read-only `read`, `grep`, `find`, and `ls`; broader Pi tool modes are not exposed by the plugin UI yet.
+That argument is the entire boundary. Local Sidekick has no way to intercept a tool call. When the sidebar shows `Ran outside allowlist: ...`, Pi has **already executed** that tool; the entry is a report, not a prevention. Treat it as a signal that your Pi setup is not behaving as the plugin requested.
+
+Two consequences:
+
+- The guarantee is only as good as Pi's implementation of those flags. Local Sidekick does not verify Pi's version or behaviour.
+- Pi's read-only tools run with the working directory set to your vault, but **this plugin does not confine Pi to the vault**. Whether Pi can read paths outside it is Pi's behaviour, not something Local Sidekick controls.
+
+## Pi Extensions, Skills, Prompt Templates, And Context Files
+
+Prompt runs pass flags that disable Pi extensions, skills, prompt templates, and context files by default. This is a security control, not a convenience default.
+
+Pi's `--tools` and `--no-tools` flags filter Pi's **built-in** tools only. Tools registered by an extension through `pi.registerTool()` remain available regardless — Pi's own documentation states that `--no-tools` disables built-in tools while "extension tools still work" (see [earendil-works/pi#2835](https://github.com/earendil-works/pi/issues/2835)). Passing `--no-extensions` is therefore what makes the tool restriction meaningful at all.
+
+Turning on `Allow Pi extensions and user configuration` means:
+
+- Extensions from your Pi configuration load, and any tools they register are available to the model.
+- The `Pi tools` setting no longer bounds what Pi can do.
+- A vault carrying a crafted `.pi/` directory can contribute extensions and context. Local Sidekick itself writes to `.pi/`, so its presence in a vault is not unusual.
+
+Only enable it if you wrote or trust every extension your Pi configuration loads.
+
+Pi tools are a separate setting, defaulting to **Read-only**: Pi's built-in `read`, `grep`, `find`, and `ls` are available from the vault root, while `bash`, `edit`, and `write` are not. `Disabled` removes Pi's tools entirely. Broader Pi tool modes are not exposed by the plugin UI.
+
+This pairing is deliberate. Read-only tools are useful only if the restriction holds, and it holds only while Pi extensions are disabled. Enabling extensions removes the guarantee for both settings at once.
+
+## Prompt Injection Is Your Responsibility
+
+Vault notes, fetched pages, command output, and files Pi reads all enter the prompt, and any of them can contain text that tries to steer the model. Local Sidekick contains the consequences — edits are proposals requiring per-edit approval with a visible diff, restricted to Markdown inside the vault — but it cannot detect a malicious instruction inside a note. Review what you open, especially vaults you did not create.
 
 ## Untrusted Vault Settings
 
-Obsidian plugin data and Sidekick profile files live inside the vault. If you open a vault from someone else, its plugin data may contain a changed Pi executable path, safe command allowlist, web fetch allowlist, experimental feature settings, selected profile, profile/memory files, or existing `.pi/` resources. Local Sidekick confirms non-default Pi executable paths once per Obsidian session before use. It also confirms before launching Pi with experimental extensions, skills, prompt templates, and context files enabled. You should still inspect settings, `Sidekick/`, and `.pi/` before running the agent in an untrusted vault.
+Obsidian plugin data and Sidekick profile files live inside the vault. If you open a vault from someone else, its plugin data may contain a changed Pi executable path, safe command allowlist, web fetch allowlist, selected profile, profile/memory files, or existing `.pi/` resources. Local Sidekick confirms non-default Pi executable paths once per Obsidian session before use.
+
+Pi extensions, skills, prompt templates, and context files are disabled by default, so an untrusted vault cannot introduce Pi extensions on its own. It can, however, ship plugin data with `allowPiUserConfig` already set to `true`, and that value is **not** currently confirmed before use. Inspect settings, `Sidekick/`, and `.pi/` before running the agent in a vault you did not create.
 
 ## Known Risks
 

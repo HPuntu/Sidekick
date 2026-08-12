@@ -131,7 +131,7 @@ function normalizeAllowedHost(value: string): string {
   }
 }
 
-function isHostAllowed(hostname: string, allowedHosts: string[]): boolean {
+export function isHostAllowed(hostname: string, allowedHosts: string[]): boolean {
   const host = hostname.toLowerCase();
   if (allowedHosts.length === 0 || isBlockedHostLiteral(host)) {
     return false;
@@ -180,7 +180,7 @@ function createPinnedLookup(address: string, family: 4 | 6): LookupFunction {
   };
 }
 
-function isBlockedHostLiteral(host: string): boolean {
+export function isBlockedHostLiteral(host: string): boolean {
   if (host === "localhost") {
     return true;
   }
@@ -188,7 +188,7 @@ function isBlockedHostLiteral(host: string): boolean {
   return isBlockedIpAddress(host);
 }
 
-function isBlockedIpAddress(address: string): boolean {
+export function isBlockedIpAddress(address: string): boolean {
   const version = isIP(address);
   if (version === 4) {
     return isBlockedIpv4(address);

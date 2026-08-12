@@ -118,6 +118,45 @@ export async function checkOllama(
   }
 }
 
+export interface OllamaUnloadResult {
+  error?: string;
+  model: string;
+  success: boolean;
+}
+
+/**
+ * Evicts a model from Ollama's memory. Ollama unloads on a generate request
+ * carrying `keep_alive: 0`, which is what `ollama stop` does; there is no
+ * dedicated unload endpoint.
+ */
+export async function unloadOllamaModel(
+  host: string,
+  model: string,
+  timeoutMs = 5000
+): Promise<OllamaUnloadResult> {
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return { error: "No model selected.", model, success: false };
+  }
+
+  try {
+    await requestJson<unknown>(
+      normalizeHost(host),
+      "/api/generate",
+      timeoutMs,
+      "POST",
+      { keep_alive: 0, model: trimmedModel, prompt: "" }
+    );
+    return { model: trimmedModel, success: true };
+  } catch (error) {
+    return {
+      error: getErrorMessage(error),
+      model: trimmedModel,
+      success: false
+    };
+  }
+}
+
 async function hydrateModelCapabilities(
   host: string,
   models: OllamaModel[],
