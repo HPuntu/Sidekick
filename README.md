@@ -22,7 +22,7 @@ What it will not do by default:
 
 **One setting removes those limits: `Allow Pi extensions and user configuration`.** It is off by default. Turning it on lets Pi load your own extensions, skills, prompt templates, and context files. Pi's tool restrictions only cover its *built-in* tools, so an extension can register tools that ignore everything above and execute whatever they like on your machine. That is a legitimate thing to want, and it is your call — but from that point the plugin can no longer bound what Pi does, and the responsibility for what your extensions run is yours.
 
-![light_mode](images/light_mode_2.png)
+![light_mode](images/light_mode_release.png)
 Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark and light mode. It can be launched from the command palette or from the small AI agent icon on the left toolbar. Doing so will open the interactive dashboard as a tab in the right hand sidebar. An agent status panel at the top of the sidebar gives real time information on the local models being used alongside interactive buttons to find local models. Below a new chat can be started from an interactive prompt box with model selection or a recent chat from session history continued.
 
 ## Features
@@ -45,7 +45,7 @@ Local Sidekick seamlessly uses your Obsidian theme for its UI, supporting dark a
 - Explicit export of Sidekick profiles into Pi prompt templates and skills under `.pi/`.
 - Obsidian command palette actions for opening the sidebar, exporting chats, checking Pi/Ollama, refreshing Sidekick memory files, and suggesting internal links.
 
-![dark_mode](images/dark_mode.png)
+![dark_mode](images/dark_mode_release.png)
 Chat session agent reply streams are rendered in markdown with your Obsidian theme, handling math and standard formatting. For a full Obsidian IDE experience use the terminal plugin alongside this so you never have to leave Obsidian!
 
 ### Internal Link Suggestions
