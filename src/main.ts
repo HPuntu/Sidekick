@@ -1103,10 +1103,13 @@ export default class AgentDashboardPlugin extends Plugin {
       this.addAgentEvent("tool", context.eventText);
     }
 
+    // The edit format goes before the grounding rules so the last thing the
+    // model reads before the user's request is how to source its answer, not
+    // an output template it might copy.
     const promptForPi = [
       ...contextBlocks.map((context) => context.promptPrefix),
-      getVaultGroundingInstructions(),
       getEditProposalInstructions(),
+      getVaultGroundingInstructions(),
       trimmedPrompt
     ].join("\n\n");
 
