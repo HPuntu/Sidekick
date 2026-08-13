@@ -34,8 +34,8 @@ import {
   normalizeSidekickRoot,
   SidekickProfile
 } from "./agent/SidekickProfile";
-import { BridgeService } from "./bridge/BridgeService";
 import {
+  checkOllama,
   createCheckingOllamaSnapshot,
   createUnknownOllamaSnapshot,
   OllamaSnapshot,
@@ -44,13 +44,14 @@ import {
 import {
   createCheckingPiSnapshot,
   createUnknownPiSnapshot,
-  PiSnapshot
+  PiSnapshot,
+  probePiExecutable
 } from "./bridge/pi/PiProbe";
 import {
   createCheckingPiRpcDiscoverySnapshot,
   createUnknownPiRpcDiscoverySnapshot,
-  PiRpcDiscoverySnapshot,
-  PiRpcModelSummary
+  discoverPiRpc,
+  PiRpcDiscoverySnapshot
 } from "./bridge/pi/PiRpcDiscovery";
 import {
   PiReadOnlyPromptRun,
@@ -61,7 +62,7 @@ import {
   createUnexpectedToolEvent,
   createPiToolEvent,
   describePiToolMode,
-  formatPiExperimentalFeatureFlag,
+  formatPiUserConfigFlag,
   formatPiToolFlag,
   getOllamaModelName,
   isPiRunPhaseNoise,
@@ -74,6 +75,7 @@ import {
   normalizeMentionedPath,
   scoreVaultFileSuggestion
 } from "./prompt/mentions";
+import { looksLikeEditRequest } from "./prompt/editIntent";
 import {
   buildDirectiveContext,
   buildMentionedFileContext,
@@ -171,7 +173,6 @@ export default class AgentDashboardPlugin extends Plugin {
   agentEvents: AgentEvent[] = [];
   agentSessionStatus: AgentSessionStatus = "idle";
   approvalRecords: ApprovalRecord[] = [];
-  bridge: BridgeService;
   lastSafetyDecision?: SafetyDecision;
   ollamaSnapshot: OllamaSnapshot = createUnknownOllamaSnapshot(
     DEFAULT_SETTINGS.ollamaHost
@@ -207,20 +208,12 @@ export default class AgentDashboardPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.bridge = new BridgeService(this.manifest.version);
     this.ollamaSnapshot = createUnknownOllamaSnapshot(this.settings.ollamaHost);
     this.piSnapshot = createUnknownPiSnapshot(this.settings.piExecutablePath);
     this.piRpcDiscoverySnapshot = createUnknownPiRpcDiscoverySnapshot(
       this.settings.piExecutablePath
     );
     await this.refreshSidekickProfiles();
-
-    if (this.settings.autoStartBridge) {
-      const snapshot = await this.bridge.start();
-      if (snapshot.status === "error") {
-        new Notice(`Local Sidekick bridge failed: ${snapshot.error}`);
-      }
-    }
 
     this.addAgentEvent(
       "status",
@@ -276,25 +269,7 @@ export default class AgentDashboardPlugin extends Plugin {
       }
     });
 
-    this.addCommand({
-      id: "restart-sidekick-bridge",
-      name: "Restart Sidekick bridge",
-      callback: async () => {
-        const snapshot = await this.bridge.restart();
-        this.showBridgeNotice(snapshot.status);
-        this.refreshDashboardViews();
-      }
-    });
 
-    this.addCommand({
-      id: "stop-sidekick-bridge",
-      name: "Stop Sidekick bridge",
-      callback: async () => {
-        const snapshot = await this.bridge.stop();
-        this.showBridgeNotice(snapshot.status);
-        this.refreshDashboardViews();
-      }
-    });
 
     this.addCommand({
       id: "check-ollama-status",
@@ -400,13 +375,6 @@ export default class AgentDashboardPlugin extends Plugin {
       }
     });
 
-    this.addCommand({
-      id: "create-sample-approval-request",
-      name: "Create sample approval request",
-      callback: () => {
-        this.createSampleApprovalRequest();
-      }
-    });
 
     void this.refreshOllamaStatus(false);
 
@@ -420,7 +388,6 @@ export default class AgentDashboardPlugin extends Plugin {
     }
 
     void this.flushPluginDataSave();
-    void this.bridge.stop();
   }
 
   async activateView(): Promise<void> {
@@ -609,18 +576,6 @@ export default class AgentDashboardPlugin extends Plugin {
     );
   }
 
-  getSelectablePiModels(): PiRpcModelSummary[] {
-    const profile = this.getSelectedSidekickProfile();
-    const profileModels = profile?.modelLabels ?? [];
-    const discovered = this.piRpcDiscoverySnapshot.models;
-    if (profileModels.length === 0) {
-      return discovered;
-    }
-
-    return profileModels.map((label) =>
-      discovered.find((model) => model.label === label) ?? { label }
-    );
-  }
 
   async selectSidekickProfile(profilePath: string): Promise<void> {
     await this.refreshSidekickProfiles();
@@ -891,7 +846,7 @@ export default class AgentDashboardPlugin extends Plugin {
     this.ollamaSnapshot = createCheckingOllamaSnapshot(this.settings.ollamaHost);
     this.refreshDashboardViews();
 
-    this.ollamaSnapshot = await this.bridge.checkOllama(
+    this.ollamaSnapshot = await checkOllama(
       this.settings.ollamaHost,
       this.settings.defaultModel
     );
@@ -924,7 +879,7 @@ export default class AgentDashboardPlugin extends Plugin {
     this.piSnapshot = createCheckingPiSnapshot(this.settings.piExecutablePath);
     this.refreshDashboardViews();
 
-    this.piSnapshot = await this.bridge.probePiExecutable(
+    this.piSnapshot = await probePiExecutable(
       this.settings.piExecutablePath
     );
     this.refreshDashboardViews();
@@ -949,7 +904,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     this.assessSafetyRequest({
       kind: "diagnostic",
-      command: `${this.settings.piExecutablePath} --mode rpc --no-session ${formatPiExperimentalFeatureFlag(this.settings.allowPiUserConfig)}`,
+      command: `${this.settings.piExecutablePath} --mode rpc --no-session ${formatPiUserConfigFlag(this.settings.allowPiUserConfig)}`,
       description: "Discover Pi RPC readiness"
     });
     this.piRpcDiscoverySnapshot = createCheckingPiRpcDiscoverySnapshot(
@@ -957,8 +912,9 @@ export default class AgentDashboardPlugin extends Plugin {
     );
     this.refreshDashboardViews();
 
-    this.piRpcDiscoverySnapshot = await this.bridge.discoverPiRpc(
+    this.piRpcDiscoverySnapshot = await discoverPiRpc(
       this.settings.piExecutablePath,
+      4000,
       this.settings.allowPiUserConfig
     );
     this.refreshDashboardViews();
@@ -984,12 +940,6 @@ export default class AgentDashboardPlugin extends Plugin {
     await this.refreshPiRpcDiscovery(false);
     this.selectDefaultPiModelIfNeeded();
 
-    if (this.bridge.getSnapshot().status === "running") {
-      await this.bridge.restart();
-    } else {
-      await this.bridge.start();
-    }
-
     const model = this.settings.selectedPiModel;
     if (model && this.agentSessionStatus !== "running") {
       await this.selectPiModel(model);
@@ -1010,7 +960,6 @@ export default class AgentDashboardPlugin extends Plugin {
    */
   async shutdownPipeline(): Promise<void> {
     this.stopAgentRun();
-    await this.bridge.stop();
 
     const model = getOllamaModelName(this.settings.selectedPiModel);
     if (!model) {
@@ -1108,10 +1057,12 @@ export default class AgentDashboardPlugin extends Plugin {
     // an output template it might copy.
     const promptForPi = [
       ...contextBlocks.map((context) => context.promptPrefix),
-      getEditProposalInstructions(),
+      // Withheld for prompts that only want an answer: a model that never sees
+      // the edit format cannot answer a summary with an edit proposal.
+      looksLikeEditRequest(trimmedPrompt) ? getEditProposalInstructions() : "",
       getVaultGroundingInstructions(),
       trimmedPrompt
-    ].join("\n\n");
+    ].filter(Boolean).join("\n\n");
 
     this.addAgentEvent("user", trimmedPrompt);
     this.agentViewMode = "chat";
@@ -1129,7 +1080,7 @@ export default class AgentDashboardPlugin extends Plugin {
     const promptDecision = this.assessSafetyRequest({
       kind: "prompt",
       // The command is recorded for the audit log; the decision uses toolMode.
-      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)} ${formatPiExperimentalFeatureFlag(this.settings.allowPiUserConfig)}`,
+      command: `${this.settings.piExecutablePath} --mode rpc ${sessionPath ? `--session ${sessionPath}` : "--no-session"} ${formatPiToolFlag(toolMode)} ${formatPiUserConfigFlag(this.settings.allowPiUserConfig)}`,
       description: `Run Pi prompt with ${describePiToolMode(toolMode)}`,
       toolMode
     });
@@ -1172,7 +1123,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
     if (this.agentSessionStatus === "running") {
       this.agentSessionStatus = "idle";
-      this.addAgentEvent("status", "Pi read-only prompt stopped.");
+      this.addAgentEvent("status", "Pi run stopped.");
       this.refreshDashboardViews();
     }
   }
@@ -1543,21 +1494,27 @@ export default class AgentDashboardPlugin extends Plugin {
       );
     }
 
+    // Report only. These probes previously called enqueueApproval, which put
+    // fabricated entries into the real approval queue for the user to clear.
     const shellDecision = this.assessSafetyRequest({
       kind: "shell",
       command: "pwd",
-      description: "Example shell command"
+      description: "Safety self-check probe: shell command"
     });
-    this.enqueueApproval(shellDecision);
-    this.addAgentEvent("tool", `Shell check: blocked - ${shellDecision.reason}`);
+    this.addAgentEvent(
+      "tool",
+      `Shell check: ${shellDecision.allowed ? "allowed" : "blocked"} - ${shellDecision.reason}`
+    );
 
     const writeDecision = this.assessSafetyRequest({
       kind: "write",
       targetPath: snapshot.vaultRoot,
-      description: "Example file write"
+      description: "Safety self-check probe: file write"
     });
-    this.enqueueApproval(writeDecision);
-    this.addAgentEvent("tool", `Write check: blocked - ${writeDecision.reason}`);
+    this.addAgentEvent(
+      "tool",
+      `Write check: ${writeDecision.allowed ? "allowed" : "blocked"} - ${writeDecision.reason}`
+    );
     this.refreshDashboardViews();
   }
 
@@ -1592,15 +1549,6 @@ export default class AgentDashboardPlugin extends Plugin {
     return views;
   }
 
-  private showBridgeNotice(status: string): void {
-    const snapshot = this.bridge.getSnapshot();
-    if (status === "running" && snapshot.url) {
-      new Notice(`Local Sidekick bridge running on ${snapshot.url}`);
-      return;
-    }
-
-    new Notice(`Local Sidekick bridge ${status}`);
-  }
 
   private restorePersistedAgentSession(
     state: PersistedAgentSessionState | undefined
@@ -1965,19 +1913,6 @@ export default class AgentDashboardPlugin extends Plugin {
     return record;
   }
 
-  private createSampleApprovalRequest(): void {
-    const decision = this.assessSafetyRequest({
-      kind: "shell",
-      command: "echo sample",
-      description: "Sample approval queue request"
-    });
-    this.enqueueApproval(decision);
-    this.addAgentEvent(
-      "tool",
-      "Sample approval request queued. Approve/deny only records a decision."
-    );
-    this.refreshDashboardViews();
-  }
 
   private markProposedEditApplied(proposedEdit: ProposedEditRecord): void {
     proposedEdit.status = "applied";
@@ -2161,12 +2096,20 @@ export default class AgentDashboardPlugin extends Plugin {
       shouldSaveSettings = true;
     }
 
+    // A profile's `models:` list constrains which model runs. Overriding the
+    // user's pick silently made it look like the plugin ignored the picker, so
+    // say so and name the profile responsible.
     if (
       profile.modelLabels.length > 0 &&
       !profile.modelLabels.includes(this.settings.selectedPiModel)
     ) {
+      const previous = this.settings.selectedPiModel;
       this.settings.selectedPiModel = profile.modelLabels[0];
       shouldSaveSettings = true;
+      this.addAgentEvent(
+        "status",
+        `Switched to ${this.settings.selectedPiModel} because the ${getSidekickProfileDisplayName(profile)} profile does not list ${previous || "the selected model"}. Add it to that profile's models, or clear the profile with /agent clear, to use it here.`
+      );
     }
 
     if (shouldSaveSettings) {
@@ -2262,7 +2205,7 @@ export default class AgentDashboardPlugin extends Plugin {
         timeoutMs: this.settings.piPromptTimeoutMinutes * 60_000,
         toolMode,
         workspaceRoot,
-        allowExperimentalPiFeatures: this.settings.allowPiUserConfig
+        allowPiUserConfig: this.settings.allowPiUserConfig
       },
       {
         onAssistantDelta: (delta) => {
@@ -2284,7 +2227,7 @@ export default class AgentDashboardPlugin extends Plugin {
           this.activePromptRun = undefined;
           this.agentSessionStatus = "error";
           clearThinking();
-          this.addAgentEvent("status", `Pi read-only prompt failed: ${message}`);
+          this.addAgentEvent("status", `Pi run failed: ${message}`);
           this.refreshDashboardViews();
         },
         onSessionState: (state) => {

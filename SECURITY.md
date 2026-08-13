@@ -35,7 +35,7 @@ What the shipped defaults allow and refuse:
 - Pi reads the vault: tools default to read-only `read`, `grep`, `find`, and `ls`.
 - Pi extensions, skills, prompt templates, and context files are disabled, which is what makes that restriction hold.
 - Pi `bash`, edit, and write tools are disabled by the plugin.
-- The plugin does launch local processes for Pi integration. This is required for local agent execution, model discovery, model switching, and prompt streaming.
+- The plugin launches local processes for Pi integration. This is required for local agent execution, model discovery, model switching, and prompt streaming. It opens no listening sockets of its own.
 - Pi and safe commands are launched without a shell, so shell expansion, pipes, redirects, and command chaining are not available through these paths.
 - The Pi executable is `pi` by default. Non-default executable paths require once-per-Obsidian-session confirmation because vault settings can be imported from elsewhere.
 - Safe commands are exact allowlist entries only and can be configured in settings.

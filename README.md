@@ -18,7 +18,7 @@ What it will not do by default:
 - **Delete.** Not implemented at all.
 - **Run shell commands.** Only exact entries in a allowlist you maintain, only when you type `@cmd(...)` yourself, and never through a shell.
 - **Reach the network.** Web fetch is off. Enabled, it is HTTPS-only to hosts you list explicitly.
-- **Phone home.** No telemetry. Prompts go to your local Ollama and nowhere else.
+- **Phone home.** No telemetry, and no local server. Prompts go to your local Ollama and nowhere else.
 
 **One setting removes those limits: `Allow Pi extensions and user configuration`.** It is off by default. Turning it on lets Pi load your own extensions, skills, prompt templates, and context files. Pi's tool restrictions only cover its *built-in* tools, so an extension can register tools that ignore everything above and execute whatever they like on your machine. That is a legitimate thing to want, and it is your call — but from that point the plugin can no longer bound what Pi does, and the responsibility for what your extensions run is yours.
 
@@ -137,7 +137,7 @@ For alpha testing, use a copied vault or a small test vault first.
 The sidebar can still be useful without Pi tools. File mentions and local context directives are often safer and more reliable than asking a model to inspect the vault on its own.
 
 ## Usage
-Open the command palette and run `Open sidekick`. Local Sidekick opens as a right sidebar so your main note stays visible.
+Open the command palette and run `Open Sidekick`. Local Sidekick opens as a right sidebar so your main note stays visible.
 
 Start a new chat from the session landing page, or select a previous session. Use the agent profile selector to choose a local `.agent.md` profile, then use the model rail at the top to switch among that profile's model choices. Use `@` in the composer to attach vault files as context.
 
@@ -320,14 +320,14 @@ For fully offline use, keep an `ollama/` model selected in the model rail. A clo
 ## Commands
 The plugin registers these Obsidian commands:
 
-- `Open sidekick`
-- `Insert sidekick block`
+- `Open Sidekick`
+- `Insert Sidekick block`
 - `Refresh Sidekick agent profiles`
 - `Create Sidekick starter files`
 - `Refresh Sidekick project index`
 - `Export Sidekick Pi resources`
-- `Restart sidekick bridge`
-- `Stop sidekick bridge`
+- `Restart Sidekick bridge`
+- `Stop Sidekick bridge`
 - `Check Ollama status`
 - `Check Pi executable`
 - `Discover Pi RPC`
@@ -337,5 +337,4 @@ The plugin registers these Obsidian commands:
 - `Export active agent chat to Markdown`
 - `Suggest internal links for current note`
 - `Run agent safety self-check`
-- `Create sample approval request`
 

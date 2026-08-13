@@ -8,7 +8,6 @@ import type { PiToolMode } from "./types";
 export interface AgentDashboardSettings {
   agentSessionName: string;
   allowedExternalWorkspaceRoots: string;
-  autoStartBridge: boolean;
   piToolMode: PiToolMode;
   allowPiUserConfig: boolean;
   piPromptTimeoutMinutes: number;
@@ -16,11 +15,9 @@ export interface AgentDashboardSettings {
   selectedPiModel: string;
   selectedAgentProfilePath: string;
   sidekickRootFolder: string;
-  statusPanelHeight: number;
   ollamaHost: string;
   defaultModel: string;
   compactBlockHeight: number;
-  permissionMode: "ask" | "trusted";
   safeCommandAllowlist: string;
   webFetchAllowedHosts: string;
   webFetchEnabled: boolean;
@@ -29,7 +26,6 @@ export interface AgentDashboardSettings {
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   agentSessionName: "default",
   allowedExternalWorkspaceRoots: "",
-  autoStartBridge: true,
   // Pi's built-in read, grep, find, and ls. Meaningful only while
   // allowPiUserConfig stays false — see below.
   piToolMode: "read-only",
@@ -43,11 +39,9 @@ export const DEFAULT_SETTINGS: AgentDashboardSettings = {
   selectedPiModel: "",
   selectedAgentProfilePath: "",
   sidekickRootFolder: DEFAULT_SIDEKICK_ROOT,
-  statusPanelHeight: 160,
   ollamaHost: "http://127.0.0.1:11434",
   defaultModel: "",
   compactBlockHeight: 360,
-  permissionMode: "ask",
   safeCommandAllowlist: [
     "git status",
     "git diff --stat"
@@ -67,18 +61,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-
-    new Setting(containerEl)
-      .setName("Start bridge automatically")
-      .setDesc("Start the local health stub when Obsidian loads the plugin.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.autoStartBridge)
-          .onChange(async (value) => {
-            this.plugin.settings.autoStartBridge = value;
-            await this.plugin.saveSettings();
-          })
-      );
 
     new Setting(containerEl)
       .setName("Safety mode")
@@ -253,20 +235,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Status panel height")
-      .setDesc("Default sidebar status panel height. You can also drag the divider between status and agent.")
-      .addSlider((slider) =>
-        slider
-          .setLimits(96, 420, 8)
-          .setDynamicTooltip()
-          .setValue(this.plugin.settings.statusPanelHeight)
-          .onChange(async (value) => {
-            this.plugin.settings.statusPanelHeight = value;
-            await this.plugin.saveSettings();
-            this.plugin.refreshDashboardViews();
-          })
-      );
 
     new Setting(containerEl)
       .setName("Safe command allowlist")
@@ -329,21 +297,5 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Permission mode")
-      .setDesc(
-        "Reserved for broader future permissions. Shell commands and deletes remain blocked."
-      )
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("ask", "Ask every time")
-          .addOption("trusted", "Trusted workspace")
-          .setValue(this.plugin.settings.permissionMode)
-          .setDisabled(true)
-          .onChange(async (value) => {
-            this.plugin.settings.permissionMode = value as "ask" | "trusted";
-            await this.plugin.saveSettings();
-          })
-      );
   }
 }

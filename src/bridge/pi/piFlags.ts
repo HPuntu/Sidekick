@@ -14,7 +14,7 @@ export const READ_ONLY_PI_TOOL_NAMES = new Set(["find", "grep", "ls", "read"]);
  * enabled case must render as empty rather than inventing a flag that is never
  * passed. Kept in step with buildReadOnlyArgs in PiReadOnlyPrompt.
  */
-export function formatPiExperimentalFeatureFlag(enabled: boolean): string {
+export function formatPiUserConfigFlag(enabled: boolean): string {
   return enabled
     ? ""
     : "--no-extensions --no-skills --no-prompt-templates --no-context-files";
@@ -61,9 +61,9 @@ export function getOllamaModelName(modelLabel: string): string {
  * Anything not listed here (retries, extension errors, failures) is shown.
  */
 const PI_RUN_PHASE_NOISE = [
-  "Pi accepted read-only prompt.",
-  "Pi read-only run started.",
-  "Pi read-only run complete.",
+  "Pi accepted the prompt.",
+  "Pi run started.",
+  "Pi run complete.",
   "Pi turn started.",
   "Model response started.",
   "Pi is reasoning."

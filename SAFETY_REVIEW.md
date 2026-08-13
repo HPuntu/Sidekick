@@ -24,7 +24,6 @@ Local Sidekick can, on a user's computer:
 - **Write Markdown files into the vault**, only after the user approves a
   specific proposed edit and reviews its diff.
 - **Talk to a local Ollama server** at the configured host.
-- **Open a loopback HTTP listener** on a random port, serving only `/health`.
 
 It does not delete files, does not write outside the vault, has no telemetry,
 and makes no network requests other than to Ollama and allowlisted hosts.
@@ -173,10 +172,8 @@ traversal and shared-prefix siblings. Tested.
 **No phoning home**: `PI_SKIP_VERSION_CHECK=1` is set on every Pi child, and the
 plugin has no telemetry. Outbound traffic is Ollama plus allowlisted hosts only.
 
-**Loopback bridge**: binds `127.0.0.1` on a random port, requires a per-start
-UUID token, serves only `/health`, sets `nosniff` and `no-store`. It is
-unauthenticated-by-default only in the sense that nothing consumes it — it is
-currently vestigial and could be removed to reduce surface.
+**No listening sockets**: the vestigial loopback `/health` bridge has been
+removed. The plugin now opens no ports at all.
 
 ## 8. Recommendations before public release
 
@@ -201,8 +198,6 @@ currently vestigial and could be removed to reduce surface.
 6. **Record a minimum supported Pi version and check it at probe time.**
    `PiProbe` already runs `--version`; nothing yet compares it. Without this,
    the plugin cannot tell whether the flags it relies on behave as expected.
-7. **Remove `BridgeService`.** Unused loopback listener; deleting it removes
-   surface and simplifies Start/Kill.
 8. **Consider confirming `safeCommandAllowlist` entries** that did not originate
    in the settings UI.
 

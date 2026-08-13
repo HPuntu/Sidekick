@@ -17,7 +17,6 @@ import { UNKNOWN_TO_PI } from "../types";
 import { getOllamaModelName } from "../bridge/pi/piFlags";
 import type { AgentEvent, AgentToolEvent } from "../agent/AgentSession";
 import type { ProposedEditDiffLine } from "../agent/ProposedEdit";
-import type { BridgeSnapshot } from "../bridge/BridgeService";
 import type { OllamaSnapshot } from "../bridge/ollama/OllamaClient";
 import type { PiSnapshot } from "../bridge/pi/PiProbe";
 import type { PiRpcDiscoverySnapshot } from "../bridge/pi/PiRpcDiscovery";
@@ -463,8 +462,8 @@ function renderTopBar(
 
   renderAgentPickerToggle(plugin, rowEl, options);
 
-  // Kill only once the pipeline is actually usable. A bridge that auto-started
-  // on load is not something the user asked for, so it still offers Start.
+  // Kill only once Pi discovery has succeeded, so the button never offers to
+  // tear down something that was never brought up.
   const ready = isPipelineReady(plugin);
   const startButton = new ButtonComponent(
     rowEl.createDiv({ cls: "agent-dashboard__topbar-actions" })
@@ -474,8 +473,8 @@ function renderTopBar(
     .setButtonText(ready ? "Kill" : "Start")
     .setTooltip(
       ready
-        ? "Stop the bridge and unload the model from Ollama to free memory. Press Start to bring it back."
-        : "Boot Ollama, Pi, the RPC bridge, and activate the model"
+        ? "Unload the model from Ollama to free memory. Press Start to bring it back."
+        : "Check Ollama, probe Pi, discover models, and activate one"
     )
     .setCta()
     .onClick(async () => {
@@ -539,14 +538,19 @@ function collectPickerModels(
     }
   }
 
+  // Only meaningful once discovery has actually returned a list. Before Start
+  // the snapshot is empty because nothing has asked Pi yet, not because Pi is
+  // missing these models — flagging then would condemn every model on load.
+  const piListIsKnown = plugin.piRpcDiscoverySnapshot.status === "ready";
+
   // Ollama's inventory is not Pi's model list. Anything only Ollama knows about
-  // is surfaced so a freshly pulled model is not invisible, but flagged,
-  // because Pi cannot activate a model absent from its own configuration.
+  // is surfaced so a freshly pulled model is not invisible, but flagged once we
+  // can tell, because Pi cannot activate a model absent from its own config.
   for (const model of plugin.ollamaSnapshot.models) {
     const label = `ollama/${model.name}`;
     if (!seen.has(label)) {
       seen.add(label);
-      merged.push({ label, name: UNKNOWN_TO_PI });
+      merged.push(piListIsKnown ? { label, name: UNKNOWN_TO_PI } : { label });
     }
   }
 
@@ -727,7 +731,16 @@ function renderAgentPickerPopover(
       applyPair("");
     });
 
-    for (const profile of profiles) {
+    // Only profiles that can actually run on this model. A profile listing no
+    // models works with any; one that lists models would otherwise be offered
+    // here and then silently switch the model away on the next prompt.
+    const compatibleProfiles = profiles.filter(
+      (profile) =>
+        profile.modelLabels.length === 0 ||
+        profile.modelLabels.includes(model.label)
+    );
+
+    for (const profile of compatibleProfiles) {
       const optionEl = submenuEl.createEl("button", {
         cls: "agent-dashboard__agent-picker-option",
         type: "button"
@@ -744,33 +757,39 @@ function renderAgentPickerPopover(
         applyPair(profile.path);
       });
     }
+
+    if (profiles.length > 0 && compatibleProfiles.length === 0) {
+      submenuEl.createDiv({
+        cls: "agent-dashboard__agent-picker-empty",
+        text: "No profile lists this model"
+      });
+    }
   }
 }
 
 /**
- * The bridge starts on load when autoStartBridge is set, so "the bridge is up"
- * is not the same as "the pipeline is usable". Both the Start/Kill button and
- * the indicator read this, so they cannot disagree.
+ * Usable means Pi answered discovery with a model list — that is what a prompt
+ * actually needs. Both the Start/Kill button and the indicator read this, so
+ * they cannot disagree.
  */
 function isPipelineReady(plugin: AgentDashboardPlugin): boolean {
-  return (
-    plugin.bridge.getSnapshot().status === "running" &&
-    plugin.piRpcDiscoverySnapshot.status === "ready"
-  );
+  return plugin.piRpcDiscoverySnapshot.status === "ready";
 }
 
 function renderPipelineIndicator(
   plugin: AgentDashboardPlugin,
   containerEl: HTMLElement
 ): void {
-  const running = plugin.bridge.getSnapshot().status === "running";
   const ready = isPipelineReady(plugin);
+  // Amber when Ollama answers but Pi has not produced a model list yet: the
+  // half-configured state users actually land in.
+  const ollamaUp = plugin.ollamaSnapshot.status === "running";
   const indicatorEl = containerEl.createDiv({
     cls: "agent-dashboard__topbar-title"
   });
   const dotEl = indicatorEl.createSpan({ cls: "agent-dashboard__pipeline-dot" });
   dotEl.toggleClass("is-running", ready);
-  dotEl.toggleClass("is-partial", running && !ready);
+  dotEl.toggleClass("is-partial", ollamaUp && !ready);
 
   const model = getCurrentModelLabel(plugin);
   indicatorEl.createSpan({
@@ -779,8 +798,8 @@ function renderPipelineIndicator(
       ? model
         ? getShortModelLabel(model)
         : "ready"
-      : running
-        ? "bridge only"
+      : ollamaUp
+        ? "Ollama only"
         : "stopped"
   });
 }
@@ -860,7 +879,6 @@ function renderStatusList(
   listEl: HTMLElement,
   options: DashboardRenderOptions
 ): void {
-  renderBridgeStatusItem(listEl, plugin.bridge.getSnapshot());
   renderPiStatusItems(listEl, plugin.piSnapshot);
   renderPiRpcStatusItems(listEl, plugin.piRpcDiscoverySnapshot);
   renderOllamaStatusItems(listEl, plugin.ollamaSnapshot);
@@ -873,20 +891,6 @@ function renderStatusList(
   );
   renderStatusItem(listEl, "Workspace", options.workspace ?? "vault");
   renderStatusItem(listEl, "Session", plugin.getAgentSessionSummary());
-}
-
-function renderBridgeStatusItem(
-  containerEl: HTMLElement,
-  snapshot: BridgeSnapshot
-): void {
-  const value =
-    snapshot.status === "running" && snapshot.url
-      ? `${snapshot.status} at ${snapshot.url}`
-      : snapshot.error
-        ? `${snapshot.status}: ${snapshot.error}`
-        : snapshot.status;
-
-  renderStatusItem(containerEl, "Bridge", value);
 }
 
 function renderOllamaStatusItems(
@@ -2156,21 +2160,20 @@ function renderToolPayload(
   });
 }
 
+/**
+ * Fallback for plain "tool" events the plugin logs as text rather than as a
+ * structured AgentToolEvent — context blocks, safety-guard notes, self-check
+ * probes. Real Pi tool calls always carry `event.tool` and never reach here.
+ *
+ * This reads wording, so it is presentation only: it picks an icon and colour
+ * and must never be relied on for a security decision.
+ */
 function inferToolEvent(text: string): AgentToolEvent {
   const lower = text.toLowerCase();
   const blocked = lower.includes("blocked") || lower.includes("denied");
   const allowed = lower.includes("allowed") || lower.includes("added ");
   const failed = lower.includes("failed") || lower.includes("error");
-  const unexpected = text.match(/Unexpected tool event in no-tools mode: ([\w-]+)/i);
   const check = text.match(/^([^:]+ check):\s*([^-]+)(?:-\s*(.+))?$/i);
-
-  if (unexpected) {
-    return {
-      eventType: unexpected[1],
-      status: "blocked",
-      title: `Blocked ${unexpected[1].replace(/_/g, " ")}`
-    };
-  }
 
   if (check) {
     return {

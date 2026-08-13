@@ -31,7 +31,6 @@ export interface SafetyDecision {
   allowed: boolean;
   reason: string;
   request: SafetyRequest;
-  requiresApproval: boolean;
 }
 
 export interface SafetySnapshot {
@@ -48,9 +47,8 @@ export function assessSafetyRequest(
   if (request.kind === "diagnostic") {
     return {
       allowed: true,
-      reason: "Read-only mode allows manual diagnostic probes.",
-      request,
-      requiresApproval: false
+      reason: "Diagnostic probes are always permitted.",
+      request
     };
   }
 
@@ -59,8 +57,7 @@ export function assessSafetyRequest(
       return {
         allowed: true,
         reason: "Prompt run has Pi tools disabled.",
-        request,
-        requiresApproval: false
+        request
       };
     }
 
@@ -68,13 +65,11 @@ export function assessSafetyRequest(
       return {
         allowed: true,
         reason: "Prompt run only enables Pi read-only tools.",
-        request,
-        requiresApproval: false
+        request
       };
     }
 
     return deny(
-      snapshot,
       request,
       "Pi prompts only allow tools disabled or the read-only tool allowlist: read, grep, find, ls."
     );
@@ -82,59 +77,56 @@ export function assessSafetyRequest(
 
   if (request.kind === "approved-write") {
     if (!request.targetPath) {
-      return deny(snapshot, request, "Approved writes must include a target path.");
+      return deny(request, "Approved writes must include a target path.");
     }
 
     if (!isPathInsideAnyRoot(request.targetPath, snapshot.allowedRoots)) {
-      return deny(snapshot, request, "Path is outside the allowed workspace roots.");
+      return deny(request, "Path is outside the allowed workspace roots.");
     }
 
     return {
       allowed: true,
       reason: "Reviewed edit mode allows approved writes inside allowed roots.",
-      request,
-      requiresApproval: false
+      request
     };
   }
 
   if (request.kind === "safe-command") {
     if (!request.command) {
-      return deny(snapshot, request, "Safe commands must include a command.");
+      return deny(request, "Safe commands must include a command.");
     }
 
     return {
       allowed: true,
       reason: "Command matched the plugin safe command allowlist.",
-      request,
-      requiresApproval: false
+      request
     };
   }
 
   if (request.kind === "shell") {
-    return deny(snapshot, request, "Read-only mode blocks shell commands.");
+    return deny(request, "Shell commands are blocked. Only allowlisted @cmd(...) entries run.");
   }
 
   if (request.kind === "write") {
-    return deny(snapshot, request, "Read-only mode blocks file writes.");
+    return deny(request, "Direct writes are blocked. Changes must go through a reviewed edit proposal.");
   }
 
   if (request.kind === "delete") {
-    return deny(snapshot, request, "Read-only mode blocks file deletes.");
+    return deny(request, "Deletes are not supported.");
   }
 
   if (!request.targetPath) {
-    return deny(snapshot, request, "Read requests must include a target path.");
+    return deny(request, "Read requests must include a target path.");
   }
 
   if (!isPathInsideAnyRoot(request.targetPath, snapshot.allowedRoots)) {
-    return deny(snapshot, request, "Path is outside the allowed workspace roots.");
+    return deny(request, "Path is outside the allowed workspace roots.");
   }
 
   return {
     allowed: true,
     reason: "Read-only request is inside an allowed workspace root.",
-    request,
-    requiresApproval: false
+    request
   };
 }
 
@@ -175,16 +167,11 @@ export function summarizeAllowedRoots(snapshot: SafetySnapshot): string {
   return "none configured";
 }
 
-function deny(
-  snapshot: SafetySnapshot,
-  request: SafetyRequest,
-  reason: string
-): SafetyDecision {
+function deny(request: SafetyRequest, reason: string): SafetyDecision {
   return {
     allowed: false,
     reason,
-    request,
-    requiresApproval: snapshot.mode !== "read-only"
+    request
   };
 }
 
