@@ -62,11 +62,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    // A Setting with no control renders as an empty row, so state the posture
+    // as a section heading rather than a setting that cannot be set.
     new Setting(containerEl)
-      .setName("Safety mode")
+      .setName("Safety")
       .setDesc(
-        "Reviewed edits mode is active. Shell commands and deletes are blocked. Approved agent-edit proposals can be applied to vault Markdown files."
-      );
+        "Pi reads the vault with its read-only tools. Shell commands and deletes are blocked, and file changes arrive as reviewed Markdown proposals you approve individually."
+      )
+      .setHeading();
 
     new Setting(containerEl)
       .setName("Allowed external workspace roots")

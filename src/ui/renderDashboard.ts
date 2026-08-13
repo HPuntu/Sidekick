@@ -79,6 +79,7 @@ export function renderDashboardShell(
   // A rebuild destroys the composer. Status events repaint mid-stream, so
   // without this the caret jumps while the user is still typing.
   const composerFocus = captureFocusedComposer(containerEl);
+  const streamScroll = captureStreamScroll(containerEl);
 
   containerEl.empty();
   containerEl.addClass("agent-dashboard");
@@ -105,6 +106,7 @@ export function renderDashboardShell(
 
   const bodyEl = containerEl.createDiv({ cls: "agent-dashboard__body" });
   renderAgentPanel(plugin, bodyEl, options);
+  restoreStreamScroll(containerEl, streamScroll);
   restoreFocusedComposer(containerEl, composerFocus);
 }
 
@@ -266,6 +268,49 @@ function truncateForDisplay(value: string, maxLength: number): string {
  * listener keeps current — carrying the value here too would let a stale
  * textarea resurrect text that was just sent.
  */
+/**
+ * Where the transcript was scrolled before a rebuild. Repaints happen while a
+ * reply streams, so re-pinning unconditionally made it impossible to scroll
+ * back and read anything — every status event yanked the view down again.
+ */
+interface StreamScrollState {
+  atBottom: boolean;
+  scrollTop: number;
+}
+
+function captureStreamScroll(
+  containerEl: HTMLElement
+): StreamScrollState | undefined {
+  const streamEl = containerEl.querySelector(".agent-dashboard__event-stream");
+  if (!(streamEl instanceof HTMLElement)) {
+    return undefined;
+  }
+
+  return {
+    atBottom: isScrolledToBottom(streamEl),
+    scrollTop: streamEl.scrollTop
+  };
+}
+
+function restoreStreamScroll(
+  containerEl: HTMLElement,
+  state: StreamScrollState | undefined
+): void {
+  const streamEl = containerEl.querySelector(".agent-dashboard__event-stream");
+  if (!(streamEl instanceof HTMLElement)) {
+    return;
+  }
+
+  // First paint of a chat, or the user was already following along: stay at the
+  // bottom as async content lands. Otherwise leave them exactly where they were.
+  if (!state || state.atBottom) {
+    stickToBottom(streamEl);
+    return;
+  }
+
+  streamEl.scrollTop = state.scrollTop;
+}
+
 interface ComposerFocusState {
   end: number;
   start: number;
@@ -1126,8 +1171,6 @@ function renderAgentPanel(
 
       renderToolEventGroup(plugin, streamEl, options, group);
     }
-
-    stickToBottom(streamEl);
   }
 
   const composerEl = panelEl.createDiv({ cls: "agent-dashboard__composer" });
