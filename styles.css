@@ -298,6 +298,24 @@
   text-transform: uppercase;
 }
 
+/* Pulled in Ollama but absent from Pi's config, so Pi cannot activate it. */
+.agent-dashboard__agent-picker-option.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-dashboard__agent-picker-badge {
+  background: var(--background-modifier-hover);
+  border-radius: 999px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-size: 10px;
+  margin-left: auto;
+  padding: 1px 6px;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
 .agent-dashboard__agent-picker-option {
   align-items: center;
   background: transparent;

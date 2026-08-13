@@ -107,7 +107,25 @@ For alpha testing, use a copied vault or a small test vault first.
 ## Pi And Ollama Setup
 1. Start Ollama.
 2. Pull the local models you want to use.
-3. Configure Pi so it can see those models.
+3. Tell Pi about those models. **This step is required and is not automatic** — Pi does not read Ollama's inventory. List each model in `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "models": [
+        { "id": "gemma4:31b" },
+        { "id": "qwen3-coder:30b" }
+      ]
+    }
+  }
+}
+```
+
+   `apiKey` must be present even though Ollama ignores it. A model you have pulled but not listed here appears in the model picker marked `not in Pi`; click it to copy the entry to paste into this file.
 4. In Obsidian, open `Settings -> Local Sidekick`.
 5. Confirm:
    - `Ollama host` points to your local Ollama server, usually `http://127.0.0.1:11434`.
@@ -149,7 +167,9 @@ Explain @Projects/Example/MAIN.md and quiz me on the key definitions.
 When the agent proposes edits, it must use reviewed edit blocks. The plugin renders a diff and requires approval before applying changes.
 
 ## Sidekick Agent Profiles And Memory
-Local Sidekick can create a vault-root `Sidekick/` folder for portable agent profiles and durable local memory files:
+**Nothing is written to your vault on install.** The starter profiles are created only when you ask for them, from `Settings -> Local Sidekick -> Create starters`, the sidebar `Create` button, or the `Create Sidekick starter files` command. Until then no `Sidekick/` folder exists and the profile picker is empty, which is expected.
+
+When you do, Local Sidekick creates a vault-root `Sidekick/` folder for portable agent profiles and durable local memory files:
 
 ```text
 Sidekick/

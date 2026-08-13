@@ -1451,12 +1451,18 @@ export default class AgentDashboardPlugin extends Plugin {
       return;
     }
 
+    // Use the provider and id Pi gave us at discovery rather than re-deriving
+    // them from the display label.
+    const discovered = this.piRpcDiscoverySnapshot.models.find(
+      (model) => model.label === modelLabel
+    );
     const result = await setPiRpcModel(
       this.settings.piExecutablePath,
       sessionPath,
       modelLabel,
       5000,
-      this.settings.allowPiUserConfig
+      this.settings.allowPiUserConfig,
+      { modelId: discovered?.id, provider: discovered?.provider }
     );
 
     if (result.success) {
@@ -1465,9 +1471,15 @@ export default class AgentDashboardPlugin extends Plugin {
       }
       this.addAgentEvent("status", `Set active Pi session model: ${modelLabel}.`);
     } else {
+      const notFound = /not found/i.test(result.error ?? "");
       this.addAgentEvent(
         "status",
-        `Selected Pi model for future runs, but set_model failed: ${result.error ?? "unknown error"}`
+        [
+          `Selected ${modelLabel} for future runs, but Pi could not activate it now: ${result.error ?? "unknown error"}`,
+          notFound
+            ? "Pi listed this model but cannot load it. Check it is actually pulled (`ollama list`) and that its provider matches, then press Start to rediscover."
+            : ""
+        ].filter(Boolean).join(" ")
       );
     }
     this.refreshDashboardViews();

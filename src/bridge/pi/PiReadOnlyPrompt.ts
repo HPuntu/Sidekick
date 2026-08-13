@@ -404,7 +404,13 @@ export function setPiRpcModel(
   sessionPath: string | undefined,
   modelLabel: string,
   timeoutMs = 5000,
-  allowExperimentalPiFeatures = false
+  allowExperimentalPiFeatures = false,
+  /**
+   * The provider and id exactly as Pi reported them during discovery. Prefer
+   * these: the label is a display string this plugin assembles as
+   * `provider/id`, and re-splitting it guesses at a boundary we already knew.
+   */
+  discovered?: { modelId?: string; provider?: string }
 ): Promise<PiSetModelResult> {
   const normalizedPath = executablePath.trim() || "pi";
   const validationError = validateExecutablePath(normalizedPath);
@@ -412,7 +418,10 @@ export function setPiRpcModel(
     return Promise.resolve({ error: validationError, success: false });
   }
 
-  const model = parseModelLabel(modelLabel);
+  const model =
+    discovered?.provider && discovered.modelId
+      ? { modelId: discovered.modelId, provider: discovered.provider }
+      : parseModelLabel(modelLabel);
   if (!model) {
     return Promise.resolve({
       error: `Unable to parse Pi model label: ${modelLabel}`,

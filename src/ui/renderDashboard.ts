@@ -1,4 +1,11 @@
-import { ButtonComponent, Component, MarkdownRenderer, setIcon, TFile } from "obsidian";
+import {
+  ButtonComponent,
+  Component,
+  MarkdownRenderer,
+  Notice,
+  setIcon,
+  TFile
+} from "obsidian";
 
 import type AgentDashboardPlugin from "../main";
 import type {
@@ -6,6 +13,8 @@ import type {
   PiToolMode,
   ProposedEditRecord
 } from "../types";
+import { UNKNOWN_TO_PI } from "../types";
+import { getOllamaModelName } from "../bridge/pi/piFlags";
 import type { AgentEvent, AgentToolEvent } from "../agent/AgentSession";
 import type { ProposedEditDiffLine } from "../agent/ProposedEdit";
 import type { BridgeSnapshot } from "../bridge/BridgeService";
@@ -530,15 +539,48 @@ function collectPickerModels(
     }
   }
 
+  // Ollama's inventory is not Pi's model list. Anything only Ollama knows about
+  // is surfaced so a freshly pulled model is not invisible, but flagged,
+  // because Pi cannot activate a model absent from its own configuration.
   for (const model of plugin.ollamaSnapshot.models) {
     const label = `ollama/${model.name}`;
     if (!seen.has(label)) {
       seen.add(label);
-      merged.push({ label });
+      merged.push({ label, name: UNKNOWN_TO_PI });
     }
   }
 
   return merged;
+}
+
+function isUnknownToPi(model: { name?: string }): boolean {
+  return model.name === UNKNOWN_TO_PI;
+}
+
+/**
+ * Pi only offers models listed in ~/.pi/agent/models.json; it does not read
+ * Ollama's inventory. Rather than editing that file ourselves — it sits outside
+ * the vault, which this plugin never writes to — hand the user the entry to
+ * paste.
+ */
+function copyPiModelEntry(modelLabel: string): void {
+  const modelId = getOllamaModelName(modelLabel);
+  const snippet = `{ "id": ${JSON.stringify(modelId)} }`;
+
+  void navigator.clipboard
+    .writeText(snippet)
+    .then(() => {
+      new Notice(
+        `Copied ${snippet}\n\nPaste it into the "models" array for your ollama provider in ~/.pi/agent/models.json, then press Start to rediscover.`,
+        10000
+      );
+    })
+    .catch(() => {
+      new Notice(
+        `Add this to the "models" array for your ollama provider in ~/.pi/agent/models.json, then press Start:\n\n${snippet}`,
+        10000
+      );
+    });
 }
 
 function renderAgentPickerPopover(
@@ -608,12 +650,35 @@ function renderAgentPickerPopover(
       cls: "agent-dashboard__agent-picker-option agent-dashboard__agent-picker-option--model",
       type: "button"
     });
+    const unknownToPi = isUnknownToPi(model);
     labelEl.toggleClass("is-selected", isSelectedModel);
+    labelEl.toggleClass("is-unavailable", unknownToPi);
     labelEl.createSpan({
       cls: "agent-dashboard__agent-picker-option-label",
       text: getShortModelLabel(model.label)
     });
+
+    if (unknownToPi) {
+      labelEl.setAttr(
+        "aria-label",
+        `${model.label} is installed in Ollama but is not in your Pi configuration. Click to copy the entry to add to models.json`
+      );
+      labelEl.setAttr(
+        "title",
+        "Pulled in Ollama, missing from your Pi config. Click to copy the models.json entry."
+      );
+      labelEl.createSpan({
+        cls: "agent-dashboard__agent-picker-badge",
+        text: "not in Pi"
+      });
+    }
+
     labelEl.addEventListener("click", () => {
+      if (unknownToPi) {
+        copyPiModelEntry(model.label);
+        return;
+      }
+
       options.host.ui.agentPickerOpen = false;
       void plugin.selectPiModel(model.label);
       options.host.rerender();
