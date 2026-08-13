@@ -326,8 +326,6 @@ The plugin registers these Obsidian commands:
 - `Create Sidekick starter files`
 - `Refresh Sidekick project index`
 - `Export Sidekick Pi resources`
-- `Restart Sidekick bridge`
-- `Stop Sidekick bridge`
 - `Check Ollama status`
 - `Check Pi executable`
 - `Discover Pi RPC`

@@ -25,7 +25,7 @@ export function getPersistedSettings(
   return migrateLegacySettingKeys(settings);
 }
 
-/** `allowPiUserConfig` was `piExperimentalFeaturesEnabled` before 0.3.0. */
+/** `allowPiUserConfig` was `piExperimentalFeaturesEnabled` before 1.0.0. */
 const LEGACY_PI_USER_CONFIG_KEY = "piExperimentalFeaturesEnabled";
 
 /**

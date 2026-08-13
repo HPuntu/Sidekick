@@ -39,8 +39,8 @@ The restriction is a command-line argument, applied at spawn
 (`src/bridge/pi/PiReadOnlyPrompt.ts`):
 
 ```
---no-tools                        # tool mode "disabled" (default)
---tools read,grep,find,ls         # tool mode "read-only"
+--tools read,grep,find,ls         # tool mode "read-only" (default)
+--no-tools                        # tool mode "disabled"
 ```
 
 `onToolEvent` in `src/main.ts` sees any other tool only as a report: a tool
@@ -180,7 +180,8 @@ removed. The plugin now opens no ports at all.
 **Done in this pass:**
 
 1. ~~Determine whether `--tools` constrains extension-provided tools~~ — it does
-   not (section 4). `piExperimentalFeaturesEnabled` reverted to `false`.
+   not (section 4). The setting, since renamed `allowPiUserConfig`, reverted
+   to `false`.
 2. ~~State in README and SECURITY.md that tool restriction is enforced by Pi~~ —
    both now carry a "who enforces tool restrictions" section, including that Pi
    is not confined to the vault by this plugin.
@@ -191,19 +192,19 @@ removed. The plugin now opens no ports at all.
 
 **Still outstanding, in priority order:**
 
-5. **Confirm a vault-supplied `piExperimentalFeaturesEnabled: true`.** Since
+5. **Confirm a vault-supplied `allowPiUserConfig: true`.** Since
    enabling it removes the tool boundary entirely, a vault that ships it as
    `true` is the sharpest remaining untrusted-vault edge. Confirm on first use
    when the value came from vault data rather than the settings UI.
 6. **Record a minimum supported Pi version and check it at probe time.**
    `PiProbe` already runs `--version`; nothing yet compares it. Without this,
    the plugin cannot tell whether the flags it relies on behave as expected.
-8. **Consider confirming `safeCommandAllowlist` entries** that did not originate
+7. **Consider confirming `safeCommandAllowlist` entries** that did not originate
    in the settings UI.
 
 ## 9. Coverage note
 
-125+ tests cover the security-relevant pure functions: path containment, the
+161 tests cover the security-relevant pure functions: path containment, the
 tool-mode decision, command parsing and allowlisting, host allowlisting and IP
 blocking, mention resolution, and path normalisation. Two deliberate mutations
 (removing the `..` traversal guard; allowing the link-local range) were
