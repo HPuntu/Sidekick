@@ -53,6 +53,11 @@ configuration.
 - Decide whether a Pi run may use tools from the tool mode itself rather than by re-parsing the assembled command string. A prompt request that omits the tool mode is now denied instead of being read out of `--no-tools` text.
 - Build inline file links with Obsidian's element helpers instead of raw DOM calls.
 
+## 0.2.4 - 2026-07-02
+
+- Merge remote-tracking branch 'origin/main' (0ec4d78)
+- fixed tool action blocked notifications showing even when not blocked (29f8b63)
+
 ## 0.2.3 - 2026-07-02
 
 - Merge remote-tracking branch 'origin/main' (92e25aa)
