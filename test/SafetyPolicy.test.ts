@@ -108,14 +108,10 @@ describe("assessSafetyRequest", () => {
     ).toBe(false);
   });
 
-  it("only requires approval outside read-only mode", () => {
-    expect(assessSafetyRequest(snapshot(), { kind: "shell" }).requiresApproval).toBe(
-      false
-    );
-    expect(
-      assessSafetyRequest(snapshot({ mode: "reviewed-edits" }), { kind: "shell" })
-        .requiresApproval
-    ).toBe(true);
+  it("explains a denial without naming a mode the plugin never sets", () => {
+    const reason = assessSafetyRequest(snapshot(), { kind: "shell" }).reason;
+    expect(reason).toContain("Shell commands are blocked");
+    expect(reason).not.toContain("Read-only mode");
   });
 });
 

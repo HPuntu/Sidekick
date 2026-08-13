@@ -10,6 +10,13 @@ export type AgentPromptContextMode = "none" | "note" | "selection" | "vault";
 export type AgentDashboardAgentView = "chat" | "history";
 export type PiToolMode = "disabled" | "read-only";
 
+/**
+ * A model Ollama has pulled but Pi did not report at discovery. Pi can only
+ * activate models in its own configuration, so these are shown but not
+ * selectable — otherwise set_model fails with "Model not found".
+ */
+export const UNKNOWN_TO_PI = "unknown-to-pi";
+
 export interface PromptContextBlock {
   eventText: string;
   promptPrefix: string;

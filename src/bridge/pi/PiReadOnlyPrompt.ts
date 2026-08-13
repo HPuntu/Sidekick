@@ -11,7 +11,7 @@ export interface PiReadOnlyPromptOptions {
   timeoutMs?: number;
   toolMode?: "disabled" | "read-only";
   workspaceRoot?: string;
-  allowExperimentalPiFeatures?: boolean;
+  allowPiUserConfig?: boolean;
 }
 
 /** How a run ended, for callers that must not infer it from status text. */
@@ -86,7 +86,7 @@ export class PiReadOnlyPromptRun {
       timeoutMs: options.timeoutMs ?? 600000,
       toolMode: options.toolMode ?? "disabled",
       workspaceRoot: options.workspaceRoot ?? "",
-      allowExperimentalPiFeatures: options.allowExperimentalPiFeatures === true
+      allowPiUserConfig: options.allowPiUserConfig === true
     };
     this.callbacks = callbacks;
   }
@@ -151,7 +151,7 @@ export class PiReadOnlyPromptRun {
       id: "local-sidekick-abort",
       type: "abort"
     });
-    this.complete("Pi read-only prompt stopped.", "stopped");
+    this.complete("Pi run stopped.", "stopped");
   }
 
   private handleStdout(chunk: string): void {
@@ -205,13 +205,13 @@ export class PiReadOnlyPromptRun {
     }
 
     if (response.command === "prompt") {
-      this.callbacks.onStatus("Pi accepted read-only prompt.");
+      this.callbacks.onStatus("Pi accepted the prompt.");
     }
   }
 
   private handleEvent(record: Record<string, unknown>): void {
     if (record.type === "agent_start") {
-      this.callbacks.onStatus("Pi read-only run started.");
+      this.callbacks.onStatus("Pi run started.");
       return;
     }
 
@@ -230,7 +230,7 @@ export class PiReadOnlyPromptRun {
         this.callbacks.onStatus("Pi completed without assistant text.");
       }
 
-      this.requestFinalStateThenComplete("Pi read-only run complete.");
+      this.requestFinalStateThenComplete("Pi run complete.");
       return;
     }
 
@@ -404,7 +404,13 @@ export function setPiRpcModel(
   sessionPath: string | undefined,
   modelLabel: string,
   timeoutMs = 5000,
-  allowExperimentalPiFeatures = false
+  allowPiUserConfig = false,
+  /**
+   * The provider and id exactly as Pi reported them during discovery. Prefer
+   * these: the label is a display string this plugin assembles as
+   * `provider/id`, and re-splitting it guesses at a boundary we already knew.
+   */
+  discovered?: { modelId?: string; provider?: string }
 ): Promise<PiSetModelResult> {
   const normalizedPath = executablePath.trim() || "pi";
   const validationError = validateExecutablePath(normalizedPath);
@@ -412,7 +418,10 @@ export function setPiRpcModel(
     return Promise.resolve({ error: validationError, success: false });
   }
 
-  const model = parseModelLabel(modelLabel);
+  const model =
+    discovered?.provider && discovered.modelId
+      ? { modelId: discovered.modelId, provider: discovered.provider }
+      : parseModelLabel(modelLabel);
   if (!model) {
     return Promise.resolve({
       error: `Unable to parse Pi model label: ${modelLabel}`,
@@ -422,7 +431,7 @@ export function setPiRpcModel(
 
   return new Promise((resolve) => {
     const args = buildReadOnlyArgs({
-      allowExperimentalPiFeatures,
+      allowPiUserConfig,
       executablePath: normalizedPath,
       modelLabel: "",
       prompt: "",
@@ -569,7 +578,7 @@ function buildReadOnlyArgs(options: Required<PiReadOnlyPromptOptions>): string[]
     args.push("--no-tools");
   }
 
-  if (!options.allowExperimentalPiFeatures) {
+  if (!options.allowPiUserConfig) {
     args.push("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files");
   }
 

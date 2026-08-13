@@ -24,7 +24,6 @@ Local Sidekick can, on a user's computer:
 - **Write Markdown files into the vault**, only after the user approves a
   specific proposed edit and reviews its diff.
 - **Talk to a local Ollama server** at the configured host.
-- **Open a loopback HTTP listener** on a random port, serving only `/health`.
 
 It does not delete files, does not write outside the vault, has no telemetry,
 and makes no network requests other than to Ollama and allowlisted hosts.
@@ -40,8 +39,8 @@ The restriction is a command-line argument, applied at spawn
 (`src/bridge/pi/PiReadOnlyPrompt.ts`):
 
 ```
---no-tools                        # tool mode "disabled" (default)
---tools read,grep,find,ls         # tool mode "read-only"
+--tools read,grep,find,ls         # tool mode "read-only" (default)
+--no-tools                        # tool mode "disabled"
 ```
 
 `onToolEvent` in `src/main.ts` sees any other tool only as a report: a tool
@@ -173,17 +172,16 @@ traversal and shared-prefix siblings. Tested.
 **No phoning home**: `PI_SKIP_VERSION_CHECK=1` is set on every Pi child, and the
 plugin has no telemetry. Outbound traffic is Ollama plus allowlisted hosts only.
 
-**Loopback bridge**: binds `127.0.0.1` on a random port, requires a per-start
-UUID token, serves only `/health`, sets `nosniff` and `no-store`. It is
-unauthenticated-by-default only in the sense that nothing consumes it — it is
-currently vestigial and could be removed to reduce surface.
+**No listening sockets**: the vestigial loopback `/health` bridge has been
+removed. The plugin now opens no ports at all.
 
 ## 8. Recommendations before public release
 
 **Done in this pass:**
 
 1. ~~Determine whether `--tools` constrains extension-provided tools~~ — it does
-   not (section 4). `piExperimentalFeaturesEnabled` reverted to `false`.
+   not (section 4). The setting, since renamed `allowPiUserConfig`, reverted
+   to `false`.
 2. ~~State in README and SECURITY.md that tool restriction is enforced by Pi~~ —
    both now carry a "who enforces tool restrictions" section, including that Pi
    is not confined to the vault by this plugin.
@@ -194,21 +192,19 @@ currently vestigial and could be removed to reduce surface.
 
 **Still outstanding, in priority order:**
 
-5. **Confirm a vault-supplied `piExperimentalFeaturesEnabled: true`.** Since
+5. **Confirm a vault-supplied `allowPiUserConfig: true`.** Since
    enabling it removes the tool boundary entirely, a vault that ships it as
    `true` is the sharpest remaining untrusted-vault edge. Confirm on first use
    when the value came from vault data rather than the settings UI.
 6. **Record a minimum supported Pi version and check it at probe time.**
    `PiProbe` already runs `--version`; nothing yet compares it. Without this,
    the plugin cannot tell whether the flags it relies on behave as expected.
-7. **Remove `BridgeService`.** Unused loopback listener; deleting it removes
-   surface and simplifies Start/Kill.
-8. **Consider confirming `safeCommandAllowlist` entries** that did not originate
+7. **Consider confirming `safeCommandAllowlist` entries** that did not originate
    in the settings UI.
 
 ## 9. Coverage note
 
-125+ tests cover the security-relevant pure functions: path containment, the
+161 tests cover the security-relevant pure functions: path containment, the
 tool-mode decision, command parsing and allowlisting, host allowlisting and IP
 blocking, mention resolution, and path normalisation. Two deliberate mutations
 (removing the `..` traversal guard; allowing the link-local range) were

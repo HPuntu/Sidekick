@@ -68,7 +68,7 @@ export function createCheckingPiRpcDiscoverySnapshot(
 export async function discoverPiRpc(
   executablePath: string,
   timeoutMs = 4000,
-  allowExperimentalPiFeatures = false
+  allowPiUserConfig = false
 ): Promise<PiRpcDiscoverySnapshot> {
   const normalizedPath = executablePath.trim() || "pi";
   const validationError = validateExecutablePath(normalizedPath);
@@ -88,7 +88,7 @@ export async function discoverPiRpc(
     const responses = await runRpcDiscovery(
       normalizedPath,
       timeoutMs,
-      allowExperimentalPiFeatures
+      allowPiUserConfig
     );
     const failedResponse = responses.find((response) => response.success === false);
 
@@ -122,11 +122,11 @@ export async function discoverPiRpc(
 function runRpcDiscovery(
   executablePath: string,
   timeoutMs: number,
-  allowExperimentalPiFeatures: boolean
+  allowPiUserConfig: boolean
 ): Promise<RpcResponse[]> {
   return new Promise((resolve, reject) => {
     const args = ["--mode", "rpc", "--no-session"];
-    if (!allowExperimentalPiFeatures) {
+    if (!allowPiUserConfig) {
       args.push("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files");
     }
 

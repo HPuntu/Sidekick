@@ -19,7 +19,13 @@ export function createApprovalRecord(
     createdAt: new Date().toISOString(),
     decision,
     id,
-    note: "Execution disabled. Approval can be recorded for UX testing only.",
+    // Approving a proposed edit really does write the file. The previous note
+    // claimed execution was disabled and approval was "for UX testing only",
+    // which was left over from before applyProposedEdit was implemented and
+    // understated what approval does.
+    note: decision.request.kind === "write"
+      ? "Approving this lets the reviewed edit be applied to the vault file."
+      : "Recorded for the audit log. This action was refused and cannot be approved.",
     status: "pending"
   };
 }

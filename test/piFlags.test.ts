@@ -4,7 +4,7 @@ import {
   createUnexpectedToolEvent,
   createPiToolEvent,
   describePiToolMode,
-  formatPiExperimentalFeatureFlag,
+  formatPiUserConfigFlag,
   formatPiToolFlag,
   getOllamaModelName,
   isPiRunPhaseNoise,
@@ -38,16 +38,16 @@ describe("formatPiToolFlag", () => {
   });
 });
 
-describe("formatPiExperimentalFeatureFlag", () => {
+describe("formatPiUserConfigFlag", () => {
   it("disables extensions, skills, templates, and context files by default", () => {
-    expect(formatPiExperimentalFeatureFlag(false)).toBe(
+    expect(formatPiUserConfigFlag(false)).toBe(
       "--no-extensions --no-skills --no-prompt-templates --no-context-files"
     );
   });
 
   it("renders as empty when enabled, because no flag is added", () => {
     // The audit log must not record a flag that never reaches Pi.
-    expect(formatPiExperimentalFeatureFlag(true)).toBe("");
+    expect(formatPiUserConfigFlag(true)).toBe("");
   });
 });
 
@@ -113,9 +113,9 @@ describe("getOllamaModelName", () => {
 
 describe("isPiRunPhaseNoise", () => {
   const noise = [
-    "Pi accepted read-only prompt.",
-    "Pi read-only run started.",
-    "Pi read-only run complete.",
+    "Pi accepted the prompt.",
+    "Pi run started.",
+    "Pi run complete.",
     "Pi turn started.",
     "Model response started.",
     "Pi is reasoning."
@@ -130,7 +130,7 @@ describe("isPiRunPhaseNoise", () => {
     "Pi completed without assistant text.",
     "Pi auto-retry 2/3: connection reset",
     "Pi extension error: bad config",
-    "Pi read-only prompt stopped.",
+    "Pi run stopped.",
     "llama3 does not support Pi/Ollama tool calls."
   ];
 

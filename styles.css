@@ -200,7 +200,7 @@
   flex: 0 0 auto;
   flex-direction: column;
   gap: 12px;
-  max-height: 50%;
+  max-height: min(50%, 340px);
   overflow-y: auto;
   padding: 10px;
 }
@@ -272,7 +272,9 @@
   flex: 0 0 auto;
   flex-direction: column;
   gap: 10px;
-  max-height: 320px;
+  /* Relative cap as well as absolute, so a short sidebar still leaves the
+     transcript some room once the panel below can shrink. */
+  max-height: min(320px, 45%);
   overflow-y: auto;
   padding: 10px;
 }
@@ -296,6 +298,24 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* Pulled in Ollama but absent from Pi's config, so Pi cannot activate it. */
+.agent-dashboard__agent-picker-option.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-dashboard__agent-picker-badge {
+  background: var(--background-modifier-hover);
+  border-radius: 999px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-size: 10px;
+  margin-left: auto;
+  padding: 1px 6px;
+  text-transform: lowercase;
+  white-space: nowrap;
 }
 
 .agent-dashboard__agent-picker-option {
@@ -398,14 +418,16 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 132px;
+  /* No floor: the dropdowns share this column, so everything below them must
+     be able to shrink or the composer is pushed out of the hidden overflow. */
+  min-height: 0;
   min-width: 0;
   padding: 0;
 }
 
 .agent-dashboard__panel--agent {
   flex: 1 1 auto;
-  min-height: 220px;
+  min-height: 0;
 }
 
 .agent-dashboard__body.is-resizing-panels,
@@ -906,10 +928,12 @@
 
 .agent-dashboard__event-stream {
   display: flex;
-  flex: 1 0 160px;
+  /* Shrinkable, so opening a dropdown squashes the transcript rather than
+     shifting the composer off the bottom of the panel. */
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 8px;
-  min-height: 160px;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
   user-select: text;
@@ -1417,6 +1441,8 @@
   border-top: 1px solid var(--agent-dashboard-border);
   display: flex;
   flex: 0 0 auto;
+  /* Pinned: it is the control surface, so it keeps its height while the
+     transcript above absorbs any space a dropdown takes. */
   flex-direction: column;
   gap: 8px;
   padding-top: 10px;
