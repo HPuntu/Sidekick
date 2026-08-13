@@ -121,6 +121,16 @@ describe("scoreVaultFileSuggestion", () => {
       Number.POSITIVE_INFINITY
     );
   });
+
+  it("matches a multi-word query, since vault filenames contain spaces", () => {
+    const path = "Learning/Maths & ML/Linear Regression (Multivariable).md";
+    expect(
+      scoreVaultFileSuggestion(path, "linear regression")
+    ).toBeLessThan(Number.POSITIVE_INFINITY);
+    expect(scoreVaultFileSuggestion(path, "maths & ml/linear")).toBeLessThan(
+      Number.POSITIVE_INFINITY
+    );
+  });
 });
 
 describe("isFuzzyMatch", () => {

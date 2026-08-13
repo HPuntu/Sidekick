@@ -352,12 +352,43 @@ export function updateStreamedEventText(
     }
   });
 
+
   return true;
 }
 
 /** Within a few pixels of the bottom, so auto-scroll does not fight the user. */
 function isScrolledToBottom(el: HTMLElement): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+}
+
+/**
+ * Markdown, maths, and embeds all render asynchronously, so setting scrollTop
+ * during the render lands on a height that is about to grow — which is why the
+ * view appeared to jump upwards. This re-pins as content settles, and gets out
+ * of the way the moment the user scrolls.
+ */
+function stickToBottom(streamEl: HTMLElement, settleMs = 2000): void {
+  const pin = (): void => {
+    streamEl.scrollTop = streamEl.scrollHeight;
+  };
+
+  pin();
+
+  const observer = new ResizeObserver(pin);
+  observer.observe(streamEl);
+  for (const child of Array.from(streamEl.children)) {
+    observer.observe(child);
+  }
+
+  const release = (): void => {
+    observer.disconnect();
+    streamEl.removeEventListener("wheel", release);
+    streamEl.removeEventListener("touchstart", release);
+  };
+
+  streamEl.addEventListener("wheel", release, { passive: true });
+  streamEl.addEventListener("touchstart", release, { passive: true });
+  window.setTimeout(release, settleMs);
 }
 
 function renderEmbeddedShell(
@@ -1026,7 +1057,8 @@ function renderAgentPanel(
 
       renderToolEventGroup(plugin, streamEl, options, group);
     }
-    streamEl.scrollTop = streamEl.scrollHeight;
+
+    stickToBottom(streamEl);
   }
 
   const composerEl = panelEl.createDiv({ cls: "agent-dashboard__composer" });
@@ -1144,8 +1176,9 @@ function renderAgentPanel(
     tooltip: "Suggest conservative internal links for the current note",
     variant: "links",
     onClick: () => {
+      // suggestInternalLinksForActiveNote repaints when it resolves; repainting
+      // here as well would only render the state from before it ran.
       void plugin.suggestInternalLinksForActiveNote();
-      options.host.rerender();
     }
   });
 
@@ -1562,7 +1595,10 @@ function getActiveMention(
 ): { end: number; query: string; start: number } | undefined {
   const cursor = promptEl.selectionStart ?? 0;
   const beforeCursor = promptEl.value.slice(0, cursor);
-  const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/);
+  // Vault filenames contain spaces, so the query may too. Bounded by a newline,
+  // a second @, and a length cap; once it stops matching any file the caller
+  // closes the list, which is what ends the mention when you carry on typing.
+  const match = beforeCursor.match(/(^|\s)@([^\n@]{0,80})$/);
   if (!match || match.index === undefined) {
     return undefined;
   }
