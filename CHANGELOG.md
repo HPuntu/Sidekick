@@ -1,5 +1,7 @@
 ## Unreleased
 
+## 1.0.0 - 2026-08-13
+
 First stable release. Local Sidekick reads your vault by default, writes only
 with per-edit approval, and one clearly-labelled setting hands control of Pi
 back to your own configuration.
