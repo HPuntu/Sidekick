@@ -62,17 +62,24 @@ export function getVaultGroundingInstructions(): string {
  * explicit negative, "summarise this note" comes back as an edit block echoing
  * the note verbatim — and fenced, so its maths never renders.
  */
+/**
+ * Balancing act. Too permissive and small models answer "summarise this note"
+ * with an edit block echoing the note; too restrictive and they refuse to edit
+ * when asked, inventing a permissions excuse. State the capability and both
+ * triggers plainly, and never imply that editing is unavailable.
+ */
 export function getEditProposalInstructions(): string {
   return [
     "<local-sidekick-edit-format>",
-    "This section describes an output format you must use ONLY when the user has asked you to change a file.",
+    "You can always propose changes to vault files. Proposals are never applied automatically: the user sees a diff and approves each one, so proposing is safe and is the expected way to offer a change.",
     "",
-    "For every other request — answering a question, explaining, summarising, comparing, listing — reply in ordinary Markdown prose. Do not use this format, and do not wrap your answer in a code fence.",
+    "USE the edit format whenever the user asks you to change, add, edit, update, rewrite, create, fix, insert, or link anything in a note — including requests to add or suggest internal links, update frontmatter, or reorganise a note. A request to 'suggest links' means: propose the edit that adds them.",
     "",
-    "Only when you are proposing an actual change to a vault file, emit a fenced block opened with the word agent-edit, whose first line is `path:` followed by the vault path, then a line containing only three dashes, then the complete new contents of that file.",
+    "To propose a change, emit a fenced block opened with the word agent-edit. Its first line is `path:` followed by the vault path, then a line containing only three dashes, then the complete new contents of that file. Include the whole file, not a fragment.",
     "",
-    "Applies to reviewed note creation, note updates, frontmatter updates, move/rename expressed as replacement files, and conservative internal-linking suggestions.",
-    "Never claim an edit has been applied. The dashboard shows a diff and requires approval.",
+    "DO NOT use the edit format when the user only wants an answer — a question, explanation, summary, comparison, or list with no change requested. Reply in ordinary Markdown prose and do not wrap that prose in a code fence.",
+    "",
+    "Never say you lack permission or the ability to edit, and never claim an edit has already been applied.",
     "</local-sidekick-edit-format>"
   ].join("\n");
 }
