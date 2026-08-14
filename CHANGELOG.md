@@ -46,6 +46,7 @@ back to your own configuration.
 
 ### Fixed
 
+- Give the Config and Chats dropdowns an explicit close button. Both could only be dismissed by re-clicking their top-bar toggle, which is undiscoverable when the chat list was opened from the home page's "more in Chats" link rather than from the Chats button itself.
 - Keep the transcript where you scrolled it. Repaints during a run were re-pinning to the bottom, which made it impossible to scroll back and read anything mid-reply.
 - Keep the composer editable while a reply streams, preserving the draft, focus, and caret position across repaints. Sending is still gated on the run finishing.
 - Let the transcript shrink when a dropdown opens, so the composer is no longer pushed off the bottom of the panel.

@@ -147,6 +147,28 @@ function renderIconButton(
   return button;
 }
 
+/**
+ * Both dropdowns are toggled from the top bar, which is not obvious once one is
+ * open and the list under it has the focus. This gives each an explicit close.
+ */
+function renderDropdownClose(
+  containerEl: HTMLElement,
+  options: DashboardRenderOptions,
+  tooltip: string
+): void {
+  renderIconButton(containerEl, {
+    fallbackText: "Close",
+    icon: "x",
+    tooltip,
+    variant: "close",
+    onClick: () => {
+      options.host.ui.menuOpen = false;
+      options.host.ui.chatsOpen = false;
+      options.host.rerender();
+    }
+  });
+}
+
 /** Vault files attached to every prompt until unpinned. */
 function renderPinnedContext(
   plugin: AgentDashboardPlugin,
@@ -871,6 +893,7 @@ function renderMenuDropdown(
       await plugin.startPipeline();
       options.host.rerender();
     });
+  renderDropdownClose(statusControlsEl, options, "Close config");
   const listEl = statusSection.createDiv({ cls: "agent-dashboard__status-list" });
   renderStatusList(plugin, listEl, options);
 }
@@ -899,6 +922,7 @@ function renderChatsDropdown(
       void plugin.startNewAgentSession();
       options.host.rerender();
     });
+  renderDropdownClose(controlsEl, options, "Close all chats");
 
   const sessions = plugin.getAgentSessionHistory();
   if (sessions.length === 0) {
@@ -2537,7 +2561,12 @@ function replaceInlineFileReferences(
   const text = textNode.textContent ?? "";
   // Deliberately the plain DOM API rather than Obsidian's createFragment /
   // createEl helpers: the linter prefers those, but they build against the
-  // global document, and this must stay in the text node's own document.
+  // global document, and this must stay in the text node's own document
+  // (rendered messages can live in a pop-out window). The rule's suggested
+  // alternative, ownerDocument.win.createEl, does not typecheck either --
+  // obsidian 1.12.3 declares neither createEl nor createFragment on Window.
+  // Leave the two warnings; obsidianmd/no-restricted-disable forbids silencing
+  // them inline.
   const fragment = textNode.ownerDocument.createDocumentFragment();
   let offset = 0;
   let changed = false;
