@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 1.0.1 - 2026-08-14
+
+- Merge branch 'dev' (a0e2a82)
+- fix: give the Config and Chats dropdowns an explicit close button (d2b9250)
+
 ## 1.0.0 - 2026-08-13
 
 First stable release. Local Sidekick reads your vault by default, writes only
