@@ -1508,6 +1508,12 @@
   --agent-dashboard-action: var(--color-yellow, #c9a227);
 }
 
+/* Dismisses a dropdown, so it stays quiet until hovered. */
+.agent-dashboard__icon-button--close {
+  --agent-dashboard-action: var(--color-red, #c0554d);
+  color: var(--agent-dashboard-muted);
+}
+
 /* Send and Stop are the primary actions, so they read as filled by default. */
 .agent-dashboard__icon-button--send.agent-dashboard__icon-button--send,
 .agent-dashboard__icon-button--stop.agent-dashboard__icon-button--stop {
